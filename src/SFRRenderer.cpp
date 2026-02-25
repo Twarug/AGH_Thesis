@@ -1,0 +1,929 @@
+#include "SFRRenderer.h"
+
+void VulkanSFRRenderer::createMultiGpuRenderPasses()
+{
+    multiGpuRenderPasses.resize(devices.size());
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = swapChainImageFormats[0];
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format = findDepthFormat(i);
+        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference colorAttachmentRef{};
+        colorAttachmentRef.attachment = 0;
+        colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference depthAttachmentRef{};
+        depthAttachmentRef.attachment = 1;
+        depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentRef;
+        subpass.pDepthStencilAttachment = &depthAttachmentRef;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+        VkRenderPassCreateInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        renderPassInfo.pAttachments = attachments.data();
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &dependency;
+
+        if (vkCreateRenderPass(devices[i], &renderPassInfo, nullptr, &multiGpuRenderPasses[i]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create multi-GPU render pass!");
+        }
+    }
+}
+
+void VulkanSFRRenderer::createSFRResources()
+{
+        createMultiGpuRenderPasses();
+
+        useExternalMemory = externalMemorySupported && devices.size() > 1;
+
+    if (useExternalMemory)
+    {
+                if (!checkExternalMemoryCompatible(1, 0, swapChainImageFormats[0]))
+        {
+            std::println("SFR: External memory not compatible between GPUs, using staging buffers");
+            useExternalMemory = false;
+        }
+    }
+
+    if (useExternalMemory)
+    {
+        std::println("SFR: Attempting external memory for zero-copy cross-GPU transfer...");
+        if (!createExternalMemoryResources())
+        {
+            std::println("SFR: External memory import failed, falling back to staging buffers");
+            useExternalMemory = false;
+            createStagingBufferResources();
+        }
+    }
+    else
+    {
+        std::println("SFR: Using staging buffers for cross-GPU transfer (CPU memcpy)");
+        createStagingBufferResources();
+    }
+
+        size_t mainGPU = 0;
+    createImage(mainGPU, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                sfrCompositeImage, sfrCompositeImageMemory);
+
+        sfrRenderCompleteSemaphores.resize(devices.size());
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(devices[i], &semaphoreInfo, nullptr, &sfrRenderCompleteSemaphores[i]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create SFR render complete semaphore!");
+        }
+    }
+
+            size_t swapchainImageCount = swapChainImages[mainGPU].size();
+    sfrPresentReadySemaphores.resize(swapchainImageCount);
+    for (size_t i = 0; i < swapchainImageCount; i++)
+    {
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(devices[mainGPU], &semaphoreInfo, nullptr, &sfrPresentReadySemaphores[i]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create SFR present ready semaphore!");
+        }
+    }
+
+        sfrCompositeCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = commandPools[mainGPU];
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateCommandBuffers(devices[mainGPU], &allocInfo, sfrCompositeCommandBuffers.data()) != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to allocate SFR composite command buffers!");
+    }
+
+        sfrCompositeFences.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        if (vkCreateFence(devices[mainGPU], &fenceInfo, nullptr, &sfrCompositeFences[i]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create SFR composite fence!");
+        }
+    }
+
+    std::println("Created SFR composite image and synchronization resources");
+}
+
+bool VulkanSFRRenderer::createExternalMemoryResources()
+{
+    size_t mainGPU = 0;
+    uint32_t sectionHeight = RENDER_HEIGHT / devices.size();
+
+    sfrRenderImages.resize(devices.size());
+    sfrRenderImageMemories.resize(devices.size());
+    sfrRenderImageViews.resize(devices.size());
+    sfrFramebuffers.resize(devices.size());
+
+    sfrExternalImages.resize(devices.size());
+    sfrExternalSemaphores.resize(devices.size());
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        if (i == mainGPU)
+        {
+                        createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+                        VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        sfrRenderImages[i], sfrRenderImageMemories[i]);
+        }
+        else
+        {
+                        createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                  sfrRenderImages[i], sfrRenderImageMemories[i]);
+
+                        sfrExternalImages[i].sourceImage = sfrRenderImages[i];
+            sfrExternalImages[i].sourceMemory = sfrRenderImageMemories[i];
+            sfrExternalImages[i].sourceGpuIndex = i;
+            sfrExternalImages[i].format = swapChainImageFormats[0];
+            sfrExternalImages[i].width = RENDER_WIDTH;
+            sfrExternalImages[i].height = RENDER_HEIGHT;
+
+                        if (!importExternalImage(mainGPU, sfrExternalImages[i]))
+            {
+                                cleanupPartialExternalMemoryResources(i);
+                return false;
+            }
+
+            createExportableSemaphore(i, sfrExternalSemaphores[i].sourceSemaphore);
+            sfrExternalSemaphores[i].sourceGpuIndex = i;
+            importExternalSemaphore(mainGPU, sfrExternalSemaphores[i]);
+        }
+
+        sfrRenderImageViews[i] = createImageView(devices[i], sfrRenderImages[i],
+                                                  swapChainImageFormats[0], VK_IMAGE_ASPECT_COLOR_BIT);
+
+        std::array<VkImageView, 2> attachments = {
+            sfrRenderImageViews[i],
+            depthImageViews[i]
+        };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = multiGpuRenderPasses[i];
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = RENDER_WIDTH;
+        framebufferInfo.height = RENDER_HEIGHT;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(devices[i], &framebufferInfo, nullptr, &sfrFramebuffers[i]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create SFR framebuffer!");
+        }
+
+        std::println("Created SFR render target {} (full {}x{}, renders section {} pixels){}",
+                     i, RENDER_WIDTH, RENDER_HEIGHT, sectionHeight, (i != mainGPU ? " (external memory)" : ""));
+    }
+
+    std::println("SFR: Successfully using external memory for zero-copy cross-GPU transfer");
+    return true;
+}
+
+void VulkanSFRRenderer::createStagingBufferResources()
+{
+    uint32_t sectionHeight = RENDER_HEIGHT / devices.size();
+
+    sfrRenderImages.resize(devices.size());
+    sfrRenderImageMemories.resize(devices.size());
+    sfrRenderImageViews.resize(devices.size());
+    sfrFramebuffers.resize(devices.size());
+    sfrStagingBuffers.resize(devices.size());
+    sfrStagingMemories.resize(devices.size());
+    sfrStagingMapped.resize(devices.size());
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+                    VK_IMAGE_TILING_OPTIMAL,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    sfrRenderImages[i], sfrRenderImageMemories[i]);
+
+        sfrRenderImageViews[i] = createImageView(devices[i], sfrRenderImages[i],
+                                                 swapChainImageFormats[0],
+                                                 VK_IMAGE_ASPECT_COLOR_BIT);
+
+        std::array attachments = {
+            sfrRenderImageViews[i],
+            depthImageViews[i]
+        };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = multiGpuRenderPasses[i];
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = RENDER_WIDTH;
+        framebufferInfo.height = RENDER_HEIGHT;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(devices[i], &framebufferInfo, nullptr, &sfrFramebuffers[i]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create SFR framebuffer!");
+        }
+
+        VkDeviceSize bufferSize = RENDER_WIDTH * sectionHeight * 4;
+        if (i == 0 && devices.size() > 1)
+        {
+            bufferSize = RENDER_WIDTH * RENDER_HEIGHT * 4;        }
+        createBuffer(i, bufferSize,
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     sfrStagingBuffers[i], sfrStagingMemories[i]);
+
+        vkMapMemory(devices[i], sfrStagingMemories[i], 0, bufferSize, 0, &sfrStagingMapped[i]);
+
+        std::println("Created SFR render target {} (full {}x{}, renders section {} pixels)",
+                     i, RENDER_WIDTH, RENDER_HEIGHT, sectionHeight);
+    }
+}
+
+void VulkanSFRRenderer::cleanupPartialExternalMemoryResources(size_t failedIndex)
+{
+    for (size_t i = 0; i <= failedIndex && i < devices.size(); i++)
+    {
+        if (sfrFramebuffers.size() > i && sfrFramebuffers[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyFramebuffer(devices[i], sfrFramebuffers[i], nullptr);
+        }
+        if (sfrRenderImageViews.size() > i && sfrRenderImageViews[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(devices[i], sfrRenderImageViews[i], nullptr);
+        }
+        if (sfrRenderImages.size() > i && sfrRenderImages[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(devices[i], sfrRenderImages[i], nullptr);
+        }
+        if (sfrRenderImageMemories.size() > i && sfrRenderImageMemories[i] != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(devices[i], sfrRenderImageMemories[i], nullptr);
+        }
+    }
+
+    for (auto& extSem : sfrExternalSemaphores)
+    {
+        if (extSem.sourceSemaphore != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(devices[extSem.sourceGpuIndex], extSem.sourceSemaphore, nullptr);
+        }
+    }
+
+    sfrFramebuffers.clear();
+    sfrRenderImageViews.clear();
+    sfrRenderImages.clear();
+    sfrRenderImageMemories.clear();
+    sfrExternalImages.clear();
+    sfrExternalSemaphores.clear();
+}
+
+void VulkanSFRRenderer::cleanupSFRResources()
+{
+    size_t mainGPU = 0;
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        vkDeviceWaitIdle(devices[i]);
+    }
+
+    for (size_t i = 0; i < sfrRenderCompleteSemaphores.size(); i++)
+    {
+        if (sfrRenderCompleteSemaphores[i] != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(devices[i], sfrRenderCompleteSemaphores[i], nullptr);
+        }
+    }
+    sfrRenderCompleteSemaphores.clear();
+
+    for (size_t i = 0; i < sfrPresentReadySemaphores.size(); i++)
+    {
+        if (sfrPresentReadySemaphores[i] != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(devices[mainGPU], sfrPresentReadySemaphores[i], nullptr);
+        }
+    }
+    sfrPresentReadySemaphores.clear();
+
+    if (!sfrCompositeCommandBuffers.empty())
+    {
+        vkFreeCommandBuffers(devices[mainGPU], commandPools[mainGPU],
+                             static_cast<uint32_t>(sfrCompositeCommandBuffers.size()),
+                             sfrCompositeCommandBuffers.data());
+        sfrCompositeCommandBuffers.clear();
+    }
+
+    for (size_t i = 0; i < sfrCompositeFences.size(); i++)
+    {
+        if (sfrCompositeFences[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyFence(devices[mainGPU], sfrCompositeFences[i], nullptr);
+        }
+    }
+    sfrCompositeFences.clear();
+
+    for (auto& extSem : sfrExternalSemaphores)
+    {
+        destroyExternalSemaphore(extSem);
+    }
+    sfrExternalSemaphores.clear();
+
+    for (size_t i = 0; i < sfrStagingBuffers.size(); i++)
+    {
+        if (sfrStagingMapped[i])
+        {
+            vkUnmapMemory(devices[i], sfrStagingMemories[i]);
+        }
+        if (sfrStagingBuffers[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(devices[i], sfrStagingBuffers[i], nullptr);
+        }
+        if (sfrStagingMemories[i] != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(devices[i], sfrStagingMemories[i], nullptr);
+        }
+    }
+    sfrStagingMapped.clear();
+    sfrStagingMemories.clear();
+    sfrStagingBuffers.clear();
+
+    for (size_t i = 0; i < sfrFramebuffers.size(); i++)
+    {
+        if (sfrFramebuffers[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyFramebuffer(devices[i], sfrFramebuffers[i], nullptr);
+        }
+    }
+    sfrFramebuffers.clear();
+
+    for (size_t i = 0; i < sfrRenderImageViews.size(); i++)
+    {
+        if (sfrRenderImageViews[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(devices[i], sfrRenderImageViews[i], nullptr);
+        }
+    }
+    sfrRenderImageViews.clear();
+
+    for (size_t i = 1; i < sfrExternalImages.size(); i++)    {
+        if (sfrExternalImages[i].importedImage != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(devices[mainGPU], sfrExternalImages[i].importedImageView, nullptr);
+            vkDestroyImage(devices[mainGPU], sfrExternalImages[i].importedImage, nullptr);
+            vkFreeMemory(devices[mainGPU], sfrExternalImages[i].importedMemory, nullptr);
+#ifdef _WIN32
+            if (sfrExternalImages[i].sharedHandle != nullptr)
+            {
+                CloseHandle(sfrExternalImages[i].sharedHandle);
+            }
+#endif
+        }
+    }
+    sfrExternalImages.clear();
+
+    for (size_t i = 0; i < sfrRenderImages.size(); i++)
+    {
+        if (sfrRenderImages[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(devices[i], sfrRenderImages[i], nullptr);
+        }
+        if (sfrRenderImageMemories[i] != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(devices[i], sfrRenderImageMemories[i], nullptr);
+        }
+    }
+    sfrRenderImages.clear();
+    sfrRenderImageMemories.clear();
+
+    if (sfrCompositeImage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(devices[mainGPU], sfrCompositeImage, nullptr);
+        vkFreeMemory(devices[mainGPU], sfrCompositeImageMemory, nullptr);
+        sfrCompositeImage = VK_NULL_HANDLE;
+        sfrCompositeImageMemory = VK_NULL_HANDLE;
+    }
+
+    for (size_t i = 0; i < multiGpuRenderPasses.size(); i++)
+    {
+        if (multiGpuRenderPasses[i]) vkDestroyRenderPass(devices[i], multiGpuRenderPasses[i], nullptr);
+    }
+    multiGpuRenderPasses.clear();
+}
+
+VkViewport VulkanSFRRenderer::getFrameViewport(uint32_t gpuIndex)
+{
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(RENDER_WIDTH);
+    viewport.height = static_cast<float>(RENDER_HEIGHT);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    return viewport;
+}
+
+glm::mat4 VulkanSFRRenderer::getProjectionMatrix(size_t gpuIndex)
+{
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f),
+                                       RENDER_WIDTH / static_cast<float>(RENDER_HEIGHT),
+                                       0.1f, 500.0f);
+    proj[1][1] *= -1;    return proj;
+}
+
+VkCommandBuffer VulkanSFRRenderer::beginSingleTimeCommands(size_t gpuIndex)
+{
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = commandPools[gpuIndex];
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer commandBuffer;
+    vkAllocateCommandBuffers(devices[gpuIndex], &allocInfo, &commandBuffer);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    return commandBuffer;
+}
+
+void VulkanSFRRenderer::endSingleTimeCommands(VkCommandBuffer commandBuffer, size_t gpuIndex, uint32_t imageIndex,
+                                              const std::vector<VkSemaphore>& waitSemaphores)
+{
+    vkEndCommandBuffer(commandBuffer);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    std::vector<VkPipelineStageFlags> waitStages(waitSemaphores.size(), VK_PIPELINE_STAGE_TRANSFER_BIT);
+    if (!waitSemaphores.empty())
+    {
+        submitInfo.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
+        submitInfo.pWaitSemaphores = waitSemaphores.data();
+        submitInfo.pWaitDstStageMask = waitStages.data();
+    }
+
+    VkSemaphore signalSemaphore = renderFinishedSemaphores[gpuIndex][imageIndex];
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &signalSemaphore;
+
+    vkQueueSubmit(graphicsQueues[gpuIndex], 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueues[gpuIndex]);
+
+    vkFreeCommandBuffers(devices[gpuIndex], commandPools[gpuIndex], 1, &commandBuffer);
+}
+
+void VulkanSFRRenderer::recordSFRRenderCommands(size_t gpuIndex, VkCommandBuffer commandBuffer,
+                                                uint32_t imageIndex, uint32_t yOffset, uint32_t renderHeight)
+{
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = multiGpuRenderPasses[gpuIndex];
+    renderPassInfo.framebuffer = sfrFramebuffers[gpuIndex];
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = {RENDER_WIDTH, RENDER_HEIGHT};
+
+    std::array<VkClearValue, 2> clearValues{};
+    if (gpuIndex == 0)
+        clearValues[0].color = {{0.15f, 0.05f, 0.05f, 1.0f}};
+    else
+        clearValues[0].color = {{0.05f, 0.05f, 0.15f, 1.0f}};
+    clearValues[1].depthStencil = {1.0f, 0};
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
+
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(RENDER_WIDTH);
+    viewport.height = static_cast<float>(RENDER_HEIGHT);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, static_cast<int32_t>(yOffset)};
+    scissor.extent = {RENDER_WIDTH, renderHeight};
+
+    recordDrawCommands(commandBuffer, gpuIndex, imageIndex, viewport, scissor);
+
+    vkCmdEndRenderPass(commandBuffer);
+}
+
+void VulkanSFRRenderer::drawFrame()
+{
+    if (devices.size() == 1)
+    {
+        drawFrameSingleGPU();
+        return;
+    }
+
+    size_t mainGPU = 0;
+    uint32_t sectionHeight = RENDER_HEIGHT / devices.size();
+    VkDeviceSize sectionSize = RENDER_WIDTH * sectionHeight * 4;
+
+    // PHASE 1: Wait for THIS frame's previous composite/present to complete
+    auto fenceStart = std::chrono::high_resolution_clock::now();
+    vkWaitForFences(devices[mainGPU], 1, &sfrCompositeFences[currentFrame], VK_TRUE, UINT64_MAX);
+    vkResetFences(devices[mainGPU], 1, &sfrCompositeFences[currentFrame]);
+
+    vkWaitForFences(devices[mainGPU], 1, &inFlightFences[mainGPU][currentFrame], VK_TRUE, UINT64_MAX);
+
+    uint32_t imageIndex;
+    VkResult result = vkAcquireNextImageKHR(devices[mainGPU], swapChains[mainGPU], UINT64_MAX,
+                                            imageAvailableSemaphores[mainGPU][currentFrame],
+                                            VK_NULL_HANDLE, &imageIndex);
+
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+    {
+        throw std::runtime_error("Failed to acquire swap chain image!");
+    }
+
+    for (size_t i = 1; i < devices.size(); i++)
+    {
+        vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
+    }
+
+    if (benchmarkEnabled && benchmark)
+    {
+        double fenceWaitMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - fenceStart).count();
+        benchmark->addFenceWaitTime(fenceWaitMs);
+    }
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        vkResetFences(devices[i], 1, &inFlightFences[i][currentFrame]);
+    }
+
+    // PHASE 2: Submit ALL GPUs' render work in parallel
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        uint32_t yOffset = i * sectionHeight;
+
+        updateCameraUniformBuffer(i, imageIndex);
+        updateSceneUniformBuffer(i, imageIndex);
+
+        vkResetCommandBuffer(commandBuffers[i][imageIndex], 0);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(commandBuffers[i][imageIndex], &beginInfo);
+
+        recordSFRRenderCommands(i, commandBuffers[i][imageIndex], imageIndex, yOffset, sectionHeight);
+
+        if (!useExternalMemory)
+        {
+            VkBufferImageCopy region{};
+            region.bufferOffset = 0;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = 0;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = {0, static_cast<int32_t>(yOffset), 0};
+            region.imageExtent = {RENDER_WIDTH, sectionHeight, 1};
+
+            vkCmdCopyImageToBuffer(commandBuffers[i][imageIndex], sfrRenderImages[i],
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sfrStagingBuffers[i], 1, &region);
+        }
+
+        vkEndCommandBuffer(commandBuffers[i][imageIndex]);
+    }
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[mainGPU][currentFrame]};
+
+        if (i == 0)
+        {
+            submitInfo.waitSemaphoreCount = 1;
+            submitInfo.pWaitSemaphores = waitSemaphores;
+            submitInfo.pWaitDstStageMask = waitStages;
+        }
+
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffers[i][imageIndex];
+
+        VkSemaphore signalSemaphore = VK_NULL_HANDLE;
+        if (useExternalMemory)
+        {
+            if (i != mainGPU)
+                signalSemaphore = sfrExternalSemaphores[i].sourceSemaphore;
+            else
+                signalSemaphore = sfrRenderCompleteSemaphores[i];
+        }
+        else
+        {
+            if (i == mainGPU)
+                signalSemaphore = sfrRenderCompleteSemaphores[i];
+        }
+
+        if (signalSemaphore != VK_NULL_HANDLE)
+        {
+            submitInfo.signalSemaphoreCount = 1;
+            submitInfo.pSignalSemaphores = &signalSemaphore;
+        }
+
+        if (vkQueueSubmit(graphicsQueues[i], 1, &submitInfo, inFlightFences[i][currentFrame]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to submit GPU " + std::to_string(i) + " render commands!");
+        }
+    }
+
+    // PHASE 3: Composite on main GPU
+    if (useExternalMemory)
+    {
+        VkCommandBuffer compositeCmd = sfrCompositeCommandBuffers[currentFrame];
+        vkResetCommandBuffer(compositeCmd, 0);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(compositeCmd, &beginInfo);
+
+        transitionImageLayout(compositeCmd, sfrCompositeImage,
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        for (size_t i = 0; i < devices.size(); i++)
+        {
+            uint32_t yOffset = i * sectionHeight;
+
+            VkImage srcImage = (i == mainGPU) ? sfrRenderImages[mainGPU] : sfrExternalImages[i].importedImage;
+
+            if (i != mainGPU)
+            {
+                transitionImageLayout(compositeCmd, srcImage,
+                                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            }
+
+            VkImageCopy copyRegion{};
+            copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copyRegion.srcSubresource.mipLevel = 0;
+            copyRegion.srcSubresource.baseArrayLayer = 0;
+            copyRegion.srcSubresource.layerCount = 1;
+            copyRegion.srcOffset = {0, static_cast<int32_t>(yOffset), 0};
+            copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copyRegion.dstSubresource.mipLevel = 0;
+            copyRegion.dstSubresource.baseArrayLayer = 0;
+            copyRegion.dstSubresource.layerCount = 1;
+            copyRegion.dstOffset = {0, static_cast<int32_t>(yOffset), 0};
+            copyRegion.extent = {RENDER_WIDTH, sectionHeight, 1};
+
+            vkCmdCopyImage(compositeCmd,
+                           srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           1, &copyRegion);
+        }
+
+        transitionImageLayout(compositeCmd, sfrCompositeImage,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        transitionImageLayout(compositeCmd, swapChainImages[mainGPU][imageIndex],
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkImageBlit blitRegion{};
+        blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blitRegion.srcSubresource.mipLevel = 0;
+        blitRegion.srcSubresource.baseArrayLayer = 0;
+        blitRegion.srcSubresource.layerCount = 1;
+        blitRegion.srcOffsets[0] = {0, 0, 0};
+        blitRegion.srcOffsets[1] = {static_cast<int32_t>(RENDER_WIDTH), static_cast<int32_t>(RENDER_HEIGHT), 1};
+        blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blitRegion.dstSubresource.mipLevel = 0;
+        blitRegion.dstSubresource.baseArrayLayer = 0;
+        blitRegion.dstSubresource.layerCount = 1;
+        blitRegion.dstOffsets[0] = {0, 0, 0};
+        blitRegion.dstOffsets[1] = {static_cast<int32_t>(swapChainExtents[mainGPU].width),
+                                    static_cast<int32_t>(swapChainExtents[mainGPU].height), 1};
+
+        vkCmdBlitImage(compositeCmd,
+                       sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       swapChainImages[mainGPU][imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blitRegion, VK_FILTER_LINEAR);
+
+        transitionImageLayout(compositeCmd, swapChainImages[mainGPU][imageIndex],
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+        vkEndCommandBuffer(compositeCmd);
+
+        VkSubmitInfo compositeSubmit{};
+        compositeSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        compositeSubmit.commandBufferCount = 1;
+        compositeSubmit.pCommandBuffers = &compositeCmd;
+
+        std::vector<VkSemaphore> waitSemaphores;
+        std::vector<VkPipelineStageFlags> waitStages;
+
+        waitSemaphores.push_back(sfrRenderCompleteSemaphores[mainGPU]);
+        waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+        for (size_t i = 1; i < devices.size(); i++)
+        {
+            waitSemaphores.push_back(sfrExternalSemaphores[i].importedSemaphore);
+            waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }
+
+        compositeSubmit.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
+        compositeSubmit.pWaitSemaphores = waitSemaphores.data();
+        compositeSubmit.pWaitDstStageMask = waitStages.data();
+
+        VkSemaphore presentReadySemaphore = sfrPresentReadySemaphores[imageIndex];
+        compositeSubmit.signalSemaphoreCount = 1;
+        compositeSubmit.pSignalSemaphores = &presentReadySemaphore;
+
+        if (vkQueueSubmit(graphicsQueues[mainGPU], 1, &compositeSubmit, sfrCompositeFences[currentFrame]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to submit composite commands!");
+        }
+    }
+    else
+    {
+        auto stagingFenceStart = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < devices.size(); i++)
+        {
+            vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
+        }
+        if (benchmarkEnabled && benchmark)
+        {
+            double fenceMs = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - stagingFenceStart).count();
+            benchmark->addFenceWaitTime(fenceMs);
+        }
+
+        auto memcpyStart = std::chrono::high_resolution_clock::now();
+        for (size_t i = 1; i < devices.size(); i++)
+        {
+            memcpy(static_cast<char*>(sfrStagingMapped[mainGPU]) + i * sectionSize,
+                   sfrStagingMapped[i], sectionSize);
+        }
+        if (benchmarkEnabled && benchmark)
+        {
+            double memcpyMs = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - memcpyStart).count();
+            benchmark->addMemcpyTime(memcpyMs);
+        }
+
+        VkCommandBuffer compositeCmd = sfrCompositeCommandBuffers[currentFrame];
+        vkResetCommandBuffer(compositeCmd, 0);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(compositeCmd, &beginInfo);
+
+        transitionImageLayout(compositeCmd, sfrCompositeImage,
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        for (size_t i = 0; i < devices.size(); i++)
+        {
+            uint32_t yOffset = i * sectionHeight;
+
+            VkBufferImageCopy region{};
+            region.bufferOffset = (i == 0) ? 0 : i * sectionSize;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = 0;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = {0, static_cast<int32_t>(yOffset), 0};
+            region.imageExtent = {RENDER_WIDTH, sectionHeight, 1};
+
+            vkCmdCopyBufferToImage(compositeCmd, sfrStagingBuffers[mainGPU],
+                                   sfrCompositeImage,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        }
+
+        transitionImageLayout(compositeCmd, sfrCompositeImage,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        transitionImageLayout(compositeCmd, swapChainImages[mainGPU][imageIndex],
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkImageBlit blitRegion{};
+        blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blitRegion.srcSubresource.mipLevel = 0;
+        blitRegion.srcSubresource.baseArrayLayer = 0;
+        blitRegion.srcSubresource.layerCount = 1;
+        blitRegion.srcOffsets[0] = {0, 0, 0};
+        blitRegion.srcOffsets[1] = {static_cast<int32_t>(RENDER_WIDTH), static_cast<int32_t>(RENDER_HEIGHT), 1};
+        blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blitRegion.dstSubresource.mipLevel = 0;
+        blitRegion.dstSubresource.baseArrayLayer = 0;
+        blitRegion.dstSubresource.layerCount = 1;
+        blitRegion.dstOffsets[0] = {0, 0, 0};
+        blitRegion.dstOffsets[1] = {static_cast<int32_t>(swapChainExtents[mainGPU].width),
+                                    static_cast<int32_t>(swapChainExtents[mainGPU].height), 1};
+
+        vkCmdBlitImage(compositeCmd,
+                       sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       swapChainImages[mainGPU][imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blitRegion, VK_FILTER_LINEAR);
+
+        transitionImageLayout(compositeCmd, swapChainImages[mainGPU][imageIndex],
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+        vkEndCommandBuffer(compositeCmd);
+
+        VkSubmitInfo compositeSubmit{};
+        compositeSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        compositeSubmit.commandBufferCount = 1;
+        compositeSubmit.pCommandBuffers = &compositeCmd;
+
+        VkSemaphore waitSem = sfrRenderCompleteSemaphores[mainGPU];
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        compositeSubmit.waitSemaphoreCount = 1;
+        compositeSubmit.pWaitSemaphores = &waitSem;
+        compositeSubmit.pWaitDstStageMask = &waitStage;
+
+        VkSemaphore presentReadySemaphore = sfrPresentReadySemaphores[imageIndex];
+        compositeSubmit.signalSemaphoreCount = 1;
+        compositeSubmit.pSignalSemaphores = &presentReadySemaphore;
+
+        if (vkQueueSubmit(graphicsQueues[mainGPU], 1, &compositeSubmit, sfrCompositeFences[currentFrame]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to submit composite commands!");
+        }
+    }
+
+    // PHASE 4: Present on dedicated present queue
+    VkSemaphore presentReadySemaphore = sfrPresentReadySemaphores[imageIndex];
+
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &presentReadySemaphore;
+
+    VkSwapchainKHR swapChains_local[] = {swapChains[mainGPU]};
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains_local;
+    presentInfo.pImageIndices = &imageIndex;
+
+    result = vkQueuePresentKHR(presentQueues[mainGPU], &presentInfo);
+
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+    {
+        throw std::runtime_error("Failed to present swap chain image!");
+    }
+
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    frameNumber++;
+}
