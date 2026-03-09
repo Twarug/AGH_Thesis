@@ -313,6 +313,12 @@ void VulkanBaseRenderer::pickPhysicalDevices()
         }
     }
 
+    if (physicalDevices.size() == 1)
+    {
+        physicalDevices.push_back(physicalDevices[0]);
+        std::println("Spoofing GPU");
+    }
+
     if (physicalDevices.empty())
     {
         throw std::runtime_error("Failed to find a suitable GPU!");
@@ -322,6 +328,7 @@ void VulkanBaseRenderer::pickPhysicalDevices()
     {
         std::println("Found {} suitable GPU(s), most powerful is primary", physicalDevices.size());
     }
+    mainGPU = 0;
 }
 
 void VulkanBaseRenderer::createLogicalDevices()
@@ -359,7 +366,7 @@ void VulkanBaseRenderer::createLogicalDevices()
             VK_KHR_SWAPCHAIN_EXTENSION_NAME
         };
 
-        if (physicalDevices.size() > 1 && checkExternalMemorySupport(physicalDevices[i]))
+        if (false && physicalDevices.size() > 1 && checkExternalMemorySupport(physicalDevices[i]))
         {
             deviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
             deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
@@ -396,12 +403,7 @@ void VulkanBaseRenderer::createLogicalDevices()
 
 void VulkanBaseRenderer::createSwapChains()
 {
-    swapChains.resize(physicalDevices.size());
     swapChainImages.resize(physicalDevices.size());
-    swapChainImageFormats.resize(physicalDevices.size());
-    swapChainExtents.resize(physicalDevices.size());
-
-    size_t mainGPU = 0;
 
     SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevices[mainGPU]);
 
@@ -445,30 +447,27 @@ void VulkanBaseRenderer::createSwapChains()
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(devices[mainGPU], &createInfo, nullptr, &swapChains[mainGPU]) != VK_SUCCESS)
+    if (vkCreateSwapchainKHR(devices[mainGPU], &createInfo, nullptr, &swapChain) != VK_SUCCESS)
     {
         throw std::runtime_error("Failed to create swap chain!");
     }
 
-    vkGetSwapchainImagesKHR(devices[mainGPU], swapChains[mainGPU], &imageCount, nullptr);
-    swapChainImages[mainGPU].resize(imageCount);
-    vkGetSwapchainImagesKHR(devices[mainGPU], swapChains[mainGPU], &imageCount, swapChainImages[mainGPU].data());
+    vkGetSwapchainImagesKHR(devices[mainGPU], swapChain, &imageCount, nullptr);
+    swapChainImages.resize(imageCount);
+    vkGetSwapchainImagesKHR(devices[mainGPU], swapChain, &imageCount, swapChainImages.data());
 
-    swapChainImageFormats[mainGPU] = surfaceFormat.format;
-    swapChainExtents[mainGPU] = extent;
+    swapChainImageFormat = surfaceFormat.format;
+    swapChainExtent = extent;
 }
 
 void VulkanBaseRenderer::createImageViews()
 {
-    swapChainImageViews.resize(physicalDevices.size());
+    swapChainImageViews.resize(swapChainImages.size());
 
-    size_t mainGPU = 0;
-    swapChainImageViews[mainGPU].resize(swapChainImages[mainGPU].size());
-
-    for (size_t j = 0; j < swapChainImages[mainGPU].size(); j++)
+    for (size_t j = 0; j < swapChainImages.size(); j++)
     {
-        swapChainImageViews[mainGPU][j] = createImageView(devices[mainGPU], swapChainImages[mainGPU][j],
-                                                          swapChainImageFormats[mainGPU], VK_IMAGE_ASPECT_COLOR_BIT);
+        swapChainImageViews[j] = createImageView(devices[mainGPU], swapChainImages[j],
+                                                          swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
     }
 }
 
@@ -479,7 +478,7 @@ void VulkanBaseRenderer::createRenderPasses()
     for (size_t i = 0; i < devices.size(); i++)
     {
         VkAttachmentDescription colorAttachment{};
-        colorAttachment.format = swapChainImageFormats[0];
+        colorAttachment.format = swapChainImageFormat;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -522,7 +521,7 @@ void VulkanBaseRenderer::createRenderPasses()
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-        std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+        std::array attachments = {colorAttachment, depthAttachment};
         VkRenderPassCreateInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -724,15 +723,12 @@ void VulkanBaseRenderer::createGraphicsPipelines()
 
 void VulkanBaseRenderer::createFramebuffers()
 {
-    swapChainFramebuffers.resize(devices.size());
+    swapChainFramebuffers.resize(swapChainImageViews.size());
 
-    size_t mainGPU = 0;
-    swapChainFramebuffers[mainGPU].resize(swapChainImageViews[mainGPU].size());
-
-    for (size_t j = 0; j < swapChainImageViews[mainGPU].size(); j++)
+    for (size_t j = 0; j < swapChainImageViews.size(); j++)
     {
-        std::array<VkImageView, 2> attachments = {
-            swapChainImageViews[mainGPU][j],
+        std::array attachments = {
+            swapChainImageViews[j],
             depthImageViews[mainGPU]
         };
 
@@ -741,11 +737,11 @@ void VulkanBaseRenderer::createFramebuffers()
         framebufferInfo.renderPass = renderPasses[mainGPU];
         framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
         framebufferInfo.pAttachments = attachments.data();
-        framebufferInfo.width = swapChainExtents[mainGPU].width;
-        framebufferInfo.height = swapChainExtents[mainGPU].height;
+        framebufferInfo.width = swapChainExtent.width;
+        framebufferInfo.height = swapChainExtent.height;
         framebufferInfo.layers = 1;
 
-        if (vkCreateFramebuffer(devices[mainGPU], &framebufferInfo, nullptr, &swapChainFramebuffers[mainGPU][j]) !=
+        if (vkCreateFramebuffer(devices[mainGPU], &framebufferInfo, nullptr, &swapChainFramebuffers[j]) !=
             VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create framebuffer!");
@@ -797,8 +793,7 @@ void VulkanBaseRenderer::createCameraUniformBuffers()
     cameraUniformBuffers.resize(devices.size());
     cameraUniformBuffersMemory.resize(devices.size());
 
-    size_t mainGPU = 0;
-    size_t imageCount = swapChainImages[mainGPU].size();
+    size_t imageCount = swapChainImages.size();
 
     VkDeviceSize bufferSize = sizeof(CameraUBO);
 
@@ -821,8 +816,7 @@ void VulkanBaseRenderer::createSceneUniformBuffers()
     sceneUniformBuffers.resize(devices.size());
     sceneUniformBuffersMemory.resize(devices.size());
 
-    size_t mainGPU = 0;
-    size_t imageCount = swapChainImages[mainGPU].size();
+    size_t imageCount = swapChainImages.size();
 
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -836,8 +830,7 @@ void VulkanBaseRenderer::createDescriptorPools()
     cameraDescriptorPools.resize(devices.size());
     sceneDescriptorPools.resize(devices.size());
 
-    size_t mainGPU = 0;
-    size_t imageCount = swapChainImages[mainGPU].size();
+    size_t imageCount = swapChainImages.size();
 
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -865,8 +858,7 @@ void VulkanBaseRenderer::createDescriptorSets()
     cameraDescriptorSets.resize(devices.size());
     sceneDescriptorSets.resize(devices.size());
 
-    size_t mainGPU = 0;
-    size_t imageCount = swapChainImages[mainGPU].size();
+    size_t imageCount = swapChainImages.size();
 
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -913,8 +905,7 @@ void VulkanBaseRenderer::createCommandBuffers()
 {
     commandBuffers.resize(devices.size());
 
-    size_t mainGPU = 0;
-    size_t bufferCount = swapChainFramebuffers[mainGPU].size();
+    size_t bufferCount = swapChainImages.size();
 
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -946,8 +937,7 @@ void VulkanBaseRenderer::createSyncObjects()
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    size_t mainGPU = 0;
-    size_t swapChainImageCount = swapChainImages[mainGPU].size();
+    size_t swapChainImageCount = swapChainImages.size();
 
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -1037,7 +1027,7 @@ void VulkanBaseRenderer::drawFrameSingleGPU()
     }
 
     uint32_t imageIndex;
-    VkResult result = vkAcquireNextImageKHR(devices[gpu], swapChains[gpu], UINT64_MAX,
+    VkResult result = vkAcquireNextImageKHR(devices[gpu], swapChain, UINT64_MAX,
                                             imageAvailableSemaphores[gpu][currentFrame], VK_NULL_HANDLE, &imageIndex);
 
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
@@ -1063,9 +1053,9 @@ void VulkanBaseRenderer::drawFrameSingleGPU()
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = renderPasses[gpu];
-    renderPassInfo.framebuffer = swapChainFramebuffers[gpu][imageIndex];
+    renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
     renderPassInfo.renderArea.offset = {0, 0};
-    renderPassInfo.renderArea.extent = swapChainExtents[gpu];
+    renderPassInfo.renderArea.extent = swapChainExtent;
 
     std::array<VkClearValue, 2> clearValues{};
     clearValues[0].color = {{0.1f, 0.1f, 0.1f, 1.0f}};
@@ -1079,14 +1069,14 @@ void VulkanBaseRenderer::drawFrameSingleGPU()
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
-    viewport.width = static_cast<float>(swapChainExtents[gpu].width);
-    viewport.height = static_cast<float>(swapChainExtents[gpu].height);
+    viewport.width = static_cast<float>(swapChainExtent.width);
+    viewport.height = static_cast<float>(swapChainExtent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
 
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = swapChainExtents[gpu];
+    scissor.extent = swapChainExtent;
 
     recordDrawCommands(commandBuffers[gpu][imageIndex], gpu, imageIndex, viewport, scissor);
 
@@ -1123,9 +1113,8 @@ void VulkanBaseRenderer::drawFrameSingleGPU()
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = signalSemaphores;
 
-    VkSwapchainKHR swapChains_local[] = {swapChains[gpu]};
     presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = swapChains_local;
+    presentInfo.pSwapchains = &swapChain;
     presentInfo.pImageIndices = &imageIndex;
 
     vkQueuePresentKHR(presentQueues[gpu], &presentInfo);
@@ -1153,6 +1142,96 @@ void VulkanBaseRenderer::recordDrawCommands(VkCommandBuffer commandBuffer, size_
     currentScene->pushConstants(commandBuffer, pipelineLayouts[gpuIndex]);
 
     currentScene->recordDrawCommands(commandBuffer, gpuIndex);
+}
+
+void VulkanBaseRenderer::cleanup()
+{
+    if (currentScene)
+    {
+        currentScene->destroyBuffers(this);
+    }
+
+    for (size_t i = 0; i < devices.size(); i++)
+    {
+        for (size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; j++)
+        {
+            vkDestroySemaphore(devices[i], imageAvailableSemaphores[i][j], nullptr);
+            vkDestroyFence(devices[i], inFlightFences[i][j], nullptr);
+        }
+
+        for (size_t j = 0; j < renderFinishedSemaphores[i].size(); j++)
+        {
+            vkDestroySemaphore(devices[i], renderFinishedSemaphores[i][j], nullptr);
+        }
+
+        // Destroy camera descriptor resources
+        vkDestroyDescriptorPool(devices[i], cameraDescriptorPools[i], nullptr);
+        for (size_t j = 0; j < cameraUniformBuffers[i].size(); j++)
+        {
+            vkDestroyBuffer(devices[i], cameraUniformBuffers[i][j], nullptr);
+            vkFreeMemory(devices[i], cameraUniformBuffersMemory[i][j], nullptr);
+        }
+
+        // Destroy scene descriptor resources
+        vkDestroyDescriptorPool(devices[i], sceneDescriptorPools[i], nullptr);
+        for (size_t j = 0; j < sceneUniformBuffers[i].size(); j++)
+        {
+            vkDestroyBuffer(devices[i], sceneUniformBuffers[i][j], nullptr);
+            vkFreeMemory(devices[i], sceneUniformBuffersMemory[i][j], nullptr);
+        }
+
+        if (i == 0 && !swapChainFramebuffers.empty())
+        {
+            for (auto framebuffer : swapChainFramebuffers)
+            {
+                vkDestroyFramebuffer(devices[i], framebuffer, nullptr);
+            }
+        }
+
+        vkDestroyImageView(devices[i], depthImageViews[i], nullptr);
+        vkDestroyImage(devices[i], depthImages[i], nullptr);
+        vkFreeMemory(devices[i], depthImageMemories[i], nullptr);
+
+        vkDestroyCommandPool(devices[i], commandPools[i], nullptr);
+
+        vkDestroyPipeline(devices[i], graphicsPipelines[i], nullptr);
+        vkDestroyPipelineLayout(devices[i], pipelineLayouts[i], nullptr);
+        vkDestroyDescriptorSetLayout(devices[i], cameraDescriptorSetLayouts[i], nullptr);
+        vkDestroyDescriptorSetLayout(devices[i], sceneDescriptorSetLayouts[i], nullptr);
+        vkDestroyRenderPass(devices[i], renderPasses[i], nullptr);
+
+        if (i == 0 && !swapChainImageViews.empty())
+        {
+            for (auto imageView : swapChainImageViews)
+            {
+                vkDestroyImageView(devices[i], imageView, nullptr);
+            }
+        }
+
+        if (i == 0 && swapChain)
+        {
+            vkDestroySwapchainKHR(devices[i], swapChain, nullptr);
+        }
+
+        vkDestroyDevice(devices[i], nullptr);
+    }
+
+    vkDestroySurfaceKHR(instance, surface, nullptr);
+
+    if (enableValidationLayers)
+    {
+        auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+        if (func != nullptr)
+        {
+            func(instance, debugMessenger, nullptr);
+        }
+    }
+
+    vkDestroyInstance(instance, nullptr);
+
+    glfwDestroyWindow(window);
+    glfwTerminate();
 }
 
 bool VulkanBaseRenderer::isDeviceSuitable(VkPhysicalDevice device)

@@ -121,7 +121,6 @@ private:
     std::vector<VkRenderPass> temporalRenderPasses;
 
     void createPingPongResources(VulkanBaseRenderer* renderer, size_t gpuIndex);
-    void createTemporalRenderPass(VulkanBaseRenderer* renderer, size_t gpuIndex);
 };
 
 class TemporalDependencyCase : public BenchmarkCase

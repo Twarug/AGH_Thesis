@@ -34,6 +34,12 @@ protected:
         return title.c_str();
     }
 
+    virtual void initVulkan() override
+    {
+        VulkanBaseRenderer::initVulkan();
+        createFramebuffers();
+    }
+
 private:
     int gpuIndex_ = 0;
 

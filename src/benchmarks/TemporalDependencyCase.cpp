@@ -8,22 +8,20 @@ void TemporalDependencyScene::createPingPongResources(VulkanBaseRenderer* render
     VkDevice device = renderer->getDevice(gpuIndex);
     auto& res = gpuResources[gpuIndex];
 
-    auto [width, height] = renderer->getRenderDimensions(gpuIndex);
-
-        for (int i = 0; i < 2; i++)
+    for (int i = 0; i < 2; i++)
     {
-        renderer->createImage(gpuIndex, width, height, VK_FORMAT_B8G8R8A8_UNORM,
+        renderer->createImage(gpuIndex, RENDER_WIDTH, RENDER_HEIGHT, VK_FORMAT_B8G8R8A8_UNORM,
                               VK_IMAGE_TILING_OPTIMAL,
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                               res.images[i], res.imageMemories[i]);
 
-                res.imageViews[i] = renderer->createImageView(device, res.images[i],
-                                                       VK_FORMAT_B8G8R8A8_UNORM,
-                                                       VK_IMAGE_ASPECT_COLOR_BIT);
+        res.imageViews[i] = renderer->createImageView(device, res.images[i],
+                                                      VK_FORMAT_B8G8R8A8_UNORM,
+                                                      VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
-        VkSamplerCreateInfo samplerInfo{};
+    VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
     samplerInfo.minFilter = VK_FILTER_LINEAR;
@@ -42,19 +40,17 @@ void TemporalDependencyScene::createPingPongResources(VulkanBaseRenderer* render
         throw std::runtime_error("Failed to create temporal sampler!");
     }
 
-        VkCommandBuffer cmdBuffer = renderer->beginSingleTimeCommands(gpuIndex);
+    VkCommandBuffer cmdBuffer = renderer->beginSingleTimeCommands(gpuIndex);
     for (int i = 0; i < 2; i++)
     {
         renderer->transitionImageLayout(cmdBuffer, res.images[i],
-                                         VK_IMAGE_LAYOUT_UNDEFINED,
-                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     renderer->endSingleTimeCommands(gpuIndex, cmdBuffer);
 
-    std::println("Created temporal ping-pong resources for GPU {} ({}x{})", gpuIndex, width, height);
+    std::println("Created temporal ping-pong resources for GPU {} ({}x{})", gpuIndex, RENDER_WIDTH, RENDER_HEIGHT);
 }
-
-void TemporalDependencyScene::createTemporalRenderPass(VulkanBaseRenderer* renderer, size_t gpuIndex) {}
 
 
 void TemporalDependencyScene::createBuffers(VulkanBaseRenderer* renderer)
@@ -220,9 +216,13 @@ VkDescriptorSet TemporalDependencyScene::getCurrentDescriptorSet(size_t gpuIndex
     return gpuResources[gpuIndex].descriptorSets[gpuResources[gpuIndex].currentIndex];
 }
 
-void TemporalDependencyScene::preFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex) {}
+void TemporalDependencyScene::preFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex)
+{
+}
 
-void TemporalDependencyScene::postFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex) {}
+void TemporalDependencyScene::postFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex)
+{
+}
 
 void TemporalDependencyScene::recordDrawCommands(VkCommandBuffer commandBuffer, size_t gpuIndex)
 {

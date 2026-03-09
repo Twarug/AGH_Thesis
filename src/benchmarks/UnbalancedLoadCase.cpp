@@ -1,7 +1,6 @@
 #include "UnbalancedLoadCase.h"
 #include "../RendererData.h"
 #include "../FileUtils.h"
-#include <utility>
 #include <print>
 
 void UnbalancedLoadScene::createPipelines(VulkanBaseRenderer* renderer)
@@ -170,26 +169,26 @@ void UnbalancedLoadScene::recordDrawCommands(VkCommandBuffer commandBuffer, size
 {
     VkPipelineLayout layout = rendererRef->getPipelineLayout(gpuIndex);
 
-    auto [width, height] = rendererRef->getRenderDimensions(gpuIndex);
-
-    uint32_t halfHeight = height / 2;
+    uint32_t halfHeight = RENDER_HEIGHT / 2;
 
     VkRect2D topScissor{};
     topScissor.offset = {0, 0};
-    topScissor.extent = {width, halfHeight};
+    topScissor.extent = {RENDER_WIDTH, halfHeight};
 
     VkRect2D bottomScissor{};
     bottomScissor.offset = {0, static_cast<int32_t>(halfHeight)};
-    bottomScissor.extent = {width, halfHeight};
+    bottomScissor.extent = {RENDER_WIDTH, halfHeight};
 
     VkRect2D& heavyScissor = config.heavyOnTop ? topScissor : bottomScissor;
     VkRect2D& trivialScissor = config.heavyOnTop ? bottomScissor : topScissor;
+
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, heavyPipelines[gpuIndex]);
     vkCmdSetScissor(commandBuffer, 0, 1, &heavyScissor);
     vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(PushConstants), &pushConstantsData);
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trivialPipelines[gpuIndex]);
     vkCmdSetScissor(commandBuffer, 0, 1, &trivialScissor);

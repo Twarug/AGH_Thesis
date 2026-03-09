@@ -37,7 +37,7 @@ protected:
 
     void drawFrame() override;
 
-    VkViewport getFrameViewport(uint32_t gpuIndex) override;
+    VkViewport getFrameViewport(uint32_t gpuIndex) const override;
 
     // Override projection matrix for asymmetric frustum in SFR mode
     glm::mat4 getProjectionMatrix(size_t gpuIndex) override;
@@ -60,10 +60,6 @@ private:
     std::vector<ExternalImage> sfrExternalImages;  // Per non-main GPU
     std::vector<ExternalSemaphore> sfrExternalSemaphores;  // For cross-GPU synchronization
 
-    // Composite image on main GPU for blit to swapchain (render resolution -> window resolution)
-    VkImage sfrCompositeImage = VK_NULL_HANDLE;
-    VkDeviceMemory sfrCompositeImageMemory = VK_NULL_HANDLE;
-
     // Synchronization for parallel rendering
     std::vector<VkSemaphore> sfrRenderCompleteSemaphores;  // Per-GPU: signaled when render finishes
     std::vector<VkSemaphore> sfrPresentReadySemaphores;    // Per-frame: signaled when composite is ready
@@ -78,8 +74,4 @@ private:
     void cleanupPartialExternalMemoryResources(size_t failedIndex);  // Cleanup after failed external memory setup
     void recordSFRRenderCommands(size_t gpuIndex, VkCommandBuffer commandBuffer,
                                  uint32_t imageIndex, uint32_t yOffset, uint32_t renderHeight);
-
-    VkCommandBuffer beginSingleTimeCommands(size_t gpuIndex);
-    void endSingleTimeCommands(VkCommandBuffer commandBuffer, size_t gpuIndex, uint32_t imageIndex,
-                               const std::vector<VkSemaphore>& waitSemaphores);
 };

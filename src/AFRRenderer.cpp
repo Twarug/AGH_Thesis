@@ -7,7 +7,7 @@ void VulkanAFRRenderer::createMultiGpuRenderPasses()
     for (size_t i = 0; i < devices.size(); i++)
     {
         VkAttachmentDescription colorAttachment{};
-        colorAttachment.format = swapChainImageFormats[0];
+        colorAttachment.format = swapChainImageFormat;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -75,7 +75,7 @@ void VulkanAFRRenderer::createAFRResources()
 
     if (useExternalMemory)
     {
-        if (!checkExternalMemoryCompatible(1, 0, swapChainImageFormats[0]))
+        if (!checkExternalMemoryCompatible(1, 0, swapChainImageFormat))
         {
             std::println("AFR: External memory not compatible between GPUs, using staging buffers");
             useExternalMemory = false;
@@ -99,7 +99,7 @@ void VulkanAFRRenderer::createAFRResources()
     }
 
     size_t mainGPU = 0;
-    createImage(mainGPU, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+    createImage(mainGPU, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
                 VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -116,7 +116,7 @@ void VulkanAFRRenderer::createAFRResources()
         }
     }
 
-    size_t swapchainImageCount = swapChainImages[mainGPU].size();
+    size_t swapchainImageCount = swapChainImages.size();
     afrPresentReadySemaphores.resize(swapchainImageCount);
     for (size_t i = 0; i < swapchainImageCount; i++)
     {
@@ -170,7 +170,7 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
     {
         if (i == mainGPU)
         {
-            createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+            createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
                         VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -178,14 +178,14 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
         }
         else
         {
-            createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+            createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                   afrRenderImages[i], afrRenderImageMemories[i]);
 
             afrExternalImages[i].sourceImage = afrRenderImages[i];
             afrExternalImages[i].sourceMemory = afrRenderImageMemories[i];
             afrExternalImages[i].sourceGpuIndex = i;
-            afrExternalImages[i].format = swapChainImageFormats[0];
+            afrExternalImages[i].format = swapChainImageFormat;
             afrExternalImages[i].width = RENDER_WIDTH;
             afrExternalImages[i].height = RENDER_HEIGHT;
 
@@ -201,7 +201,7 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
         }
 
         afrRenderImageViews[i] = createImageView(devices[i], afrRenderImages[i],
-                                                 swapChainImageFormats[0], VK_IMAGE_ASPECT_COLOR_BIT);
+                                                 swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 
         std::array<VkImageView, 2> attachments = {
             afrRenderImageViews[i],
@@ -242,14 +242,14 @@ void VulkanAFRRenderer::createStagingBufferResources()
 
     for (size_t i = 0; i < devices.size(); i++)
     {
-        createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+        createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
                     VK_IMAGE_TILING_OPTIMAL,
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                     afrRenderImages[i], afrRenderImageMemories[i]);
 
         afrRenderImageViews[i] = createImageView(devices[i], afrRenderImages[i],
-                                                 swapChainImageFormats[0], VK_IMAGE_ASPECT_COLOR_BIT);
+                                                 swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 
         std::array<VkImageView, 2> attachments = {
             afrRenderImageViews[i],
@@ -506,7 +506,7 @@ void VulkanAFRRenderer::drawFrame()
     }
 
     uint32_t imageIndex;
-    VkResult result = vkAcquireNextImageKHR(devices[mainGPU], swapChains[mainGPU], UINT64_MAX,
+    VkResult result = vkAcquireNextImageKHR(devices[mainGPU], swapChain, UINT64_MAX,
                                             imageAvailableSemaphores[mainGPU][currentFrame],
                                             VK_NULL_HANDLE, &imageIndex);
 
@@ -719,7 +719,7 @@ void VulkanAFRRenderer::drawFrame()
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     }
 
-    transitionImageLayout(afrCompositeCommandBuffers[currentFrame], swapChainImages[mainGPU][imageIndex],
+    transitionImageLayout(afrCompositeCommandBuffers[currentFrame], swapChainImages[imageIndex],
                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkImageBlit blitRegion{};
@@ -735,16 +735,16 @@ void VulkanAFRRenderer::drawFrame()
     blitRegion.dstSubresource.layerCount = 1;
     blitRegion.dstOffsets[0] = {0, 0, 0};
     blitRegion.dstOffsets[1] = {
-        static_cast<int32_t>(swapChainExtents[mainGPU].width),
-        static_cast<int32_t>(swapChainExtents[mainGPU].height), 1
+        static_cast<int32_t>(swapChainExtent.width),
+        static_cast<int32_t>(swapChainExtent.height), 1
     };
 
     vkCmdBlitImage(afrCompositeCommandBuffers[currentFrame],
                    afrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   swapChainImages[mainGPU][imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   swapChainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    1, &blitRegion, VK_FILTER_LINEAR);
 
-    transitionImageLayout(afrCompositeCommandBuffers[currentFrame], swapChainImages[mainGPU][imageIndex],
+    transitionImageLayout(afrCompositeCommandBuffers[currentFrame], swapChainImages[imageIndex],
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     vkEndCommandBuffer(afrCompositeCommandBuffers[currentFrame]);
@@ -786,9 +786,8 @@ void VulkanAFRRenderer::drawFrame()
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = &afrPresentReadySemaphores[imageIndex];
 
-    VkSwapchainKHR swapChains_local[] = {swapChains[mainGPU]};
     presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = swapChains_local;
+    presentInfo.pSwapchains = &swapChain;
     presentInfo.pImageIndices = &imageIndex;
 
     result = vkQueuePresentKHR(presentQueues[mainGPU], &presentInfo);

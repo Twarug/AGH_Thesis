@@ -59,8 +59,10 @@ struct ExternalSemaphore {
 
 
 // Render dimensions (internal framebuffer resolution - 4K for heavy fragment testing)
-const uint32_t RENDER_WIDTH = 3840;
-const uint32_t RENDER_HEIGHT = 2160;
+// const uint32_t RENDER_WIDTH = 3840;
+// const uint32_t RENDER_HEIGHT = 2160;
+const uint32_t RENDER_WIDTH = 1920;
+const uint32_t RENDER_HEIGHT = 1080;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Validation layers
@@ -101,21 +103,24 @@ protected:
     VkDebugUtilsMessengerEXT debugMessenger{};
     VkSurfaceKHR surface{};
 
+    // When >= 0, only use this specific GPU (used for single-GPU benchmarking)
+    int forcedGpuIndex = -1;
+
+    int mainGPU = -1;
+
     std::vector<VkPhysicalDevice> physicalDevices;
     std::vector<VkDevice> devices;
 
-    // When >= 0, only use this specific GPU (used for single-GPU benchmarking)
-    int forcedGpuIndex = -1;
     std::vector<VkQueue> graphicsQueues;
     std::vector<VkQueue> presentQueues;
 
     // Swapchain (single for main GPU)
-    std::vector<VkSwapchainKHR> swapChains;
-    std::vector<std::vector<VkImage>> swapChainImages;
-    std::vector<VkFormat> swapChainImageFormats;
-    std::vector<VkExtent2D> swapChainExtents;
-    std::vector<std::vector<VkImageView>> swapChainImageViews;
-    std::vector<std::vector<VkFramebuffer>> swapChainFramebuffers;
+    VkSwapchainKHR swapChain = VK_NULL_HANDLE;
+    std::vector<VkImage> swapChainImages;
+    VkFormat swapChainImageFormat = VK_FORMAT_UNDEFINED;
+    VkExtent2D swapChainExtent{};
+    std::vector<VkImageView> swapChainImageViews;
+    std::vector<VkFramebuffer> swapChainFramebuffers;
 
     // Render pass and pipeline
     std::vector<VkRenderPass> renderPasses;
@@ -225,13 +230,6 @@ public:
         return createShaderModule(gpuIndex, code);
     }
 
-    // Get render dimensions for current frame
-    virtual std::pair<uint32_t, uint32_t> getRenderDimensions(size_t gpuIndex) const
-    {
-        VkViewport vp = const_cast<VulkanBaseRenderer*>(this)->getFrameViewport(gpuIndex);
-        return {static_cast<uint32_t>(vp.width), static_cast<uint32_t>(vp.height)};
-    }
-
     // Camera/transform matrices - accessible by Scene, can be overridden by renderers
     virtual glm::mat4 getViewMatrix(size_t gpuIndex);
     virtual glm::mat4 getProjectionMatrix(size_t gpuIndex);
@@ -282,7 +280,6 @@ protected:
         createDescriptorSetLayouts();  // Camera layout + Scene layout
         createGraphicsPipelines();     // Needs Scene for shader paths
         createDepthResources();
-        createFramebuffers();
         createCommandPools();
         createSceneBuffers();          // Creates vertex, index, SSBO buffers
         createCameraUniformBuffers();  // Renderer's camera UBOs
@@ -336,7 +333,7 @@ protected:
     }
 
     virtual void drawFrame() = 0; // Pure virtual - implemented by derived classes
-    virtual VkViewport getFrameViewport(uint32_t gpuIndex)
+    virtual VkViewport getFrameViewport(uint32_t gpuIndex) const
     {
         return {0, 0, RENDER_WIDTH, RENDER_HEIGHT, 0, 1,};
     }
@@ -348,95 +345,7 @@ protected:
     virtual void recordDrawCommands(VkCommandBuffer commandBuffer, size_t gpuIndex, uint32_t imageIndex,
                                     const VkViewport& viewport, const VkRect2D& scissor);
 
-    virtual void cleanup()
-    {
-        if (currentScene)
-        {
-            currentScene->destroyBuffers(this);
-        }
-
-        for (size_t i = 0; i < devices.size(); i++)
-        {
-            for (size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; j++)
-            {
-                vkDestroySemaphore(devices[i], imageAvailableSemaphores[i][j], nullptr);
-                vkDestroyFence(devices[i], inFlightFences[i][j], nullptr);
-            }
-
-            for (size_t j = 0; j < renderFinishedSemaphores[i].size(); j++)
-            {
-                vkDestroySemaphore(devices[i], renderFinishedSemaphores[i][j], nullptr);
-            }
-
-            // Destroy camera descriptor resources
-            vkDestroyDescriptorPool(devices[i], cameraDescriptorPools[i], nullptr);
-            for (size_t j = 0; j < cameraUniformBuffers[i].size(); j++)
-            {
-                vkDestroyBuffer(devices[i], cameraUniformBuffers[i][j], nullptr);
-                vkFreeMemory(devices[i], cameraUniformBuffersMemory[i][j], nullptr);
-            }
-
-            // Destroy scene descriptor resources
-            vkDestroyDescriptorPool(devices[i], sceneDescriptorPools[i], nullptr);
-            for (size_t j = 0; j < sceneUniformBuffers[i].size(); j++)
-            {
-                vkDestroyBuffer(devices[i], sceneUniformBuffers[i][j], nullptr);
-                vkFreeMemory(devices[i], sceneUniformBuffersMemory[i][j], nullptr);
-            }
-
-            if (i == 0 && !swapChainFramebuffers[i].empty())
-            {
-                for (auto framebuffer : swapChainFramebuffers[i])
-                {
-                    vkDestroyFramebuffer(devices[i], framebuffer, nullptr);
-                }
-            }
-
-            vkDestroyImageView(devices[i], depthImageViews[i], nullptr);
-            vkDestroyImage(devices[i], depthImages[i], nullptr);
-            vkFreeMemory(devices[i], depthImageMemories[i], nullptr);
-
-            vkDestroyCommandPool(devices[i], commandPools[i], nullptr);
-
-            vkDestroyPipeline(devices[i], graphicsPipelines[i], nullptr);
-            vkDestroyPipelineLayout(devices[i], pipelineLayouts[i], nullptr);
-            vkDestroyDescriptorSetLayout(devices[i], cameraDescriptorSetLayouts[i], nullptr);
-            vkDestroyDescriptorSetLayout(devices[i], sceneDescriptorSetLayouts[i], nullptr);
-            vkDestroyRenderPass(devices[i], renderPasses[i], nullptr);
-
-            if (i == 0 && !swapChainImageViews[i].empty())
-            {
-                for (auto imageView : swapChainImageViews[i])
-                {
-                    vkDestroyImageView(devices[i], imageView, nullptr);
-                }
-            }
-
-            if (i == 0 && swapChains[i])
-            {
-                vkDestroySwapchainKHR(devices[i], swapChains[i], nullptr);
-            }
-
-            vkDestroyDevice(devices[i], nullptr);
-        }
-
-        vkDestroySurfaceKHR(instance, surface, nullptr);
-
-        if (enableValidationLayers)
-        {
-            auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-                vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
-            if (func != nullptr)
-            {
-                func(instance, debugMessenger, nullptr);
-            }
-        }
-
-        vkDestroyInstance(instance, nullptr);
-
-        glfwDestroyWindow(window);
-        glfwTerminate();
-    }
+    virtual void cleanup();
 
     // Helper functions
     void createInstance();
