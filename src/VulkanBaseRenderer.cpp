@@ -101,7 +101,6 @@ void VulkanBaseRenderer::createInstance()
 
     extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     extensions.push_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
-    extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -371,11 +370,7 @@ void VulkanBaseRenderer::createLogicalDevices()
         if (physicalDevices.size() > 1 && checkExternalMemorySupport(physicalDevices[i]))
         {
             deviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
-            deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
             deviceExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
-#ifdef _WIN32
-            deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
-#endif
             if (i == 0)
             {
                 externalMemorySupported = true;
@@ -1704,11 +1699,7 @@ bool VulkanBaseRenderer::checkExternalMemorySupport(VkPhysicalDevice device)
 
     std::set<std::string> requiredExtensions = {
         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
         VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME,
-#ifdef _WIN32
-        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME
-#endif
     };
 
     for (const auto& extension : availableExtensions)
@@ -1901,32 +1892,6 @@ void VulkanBaseRenderer::createExportableImage(size_t sourceGpuIndex, uint32_t w
     allocationSize = static_cast<size_t>(alignedSize);
 }
 
-#ifdef _WIN32
-HANDLE VulkanBaseRenderer::getSemaphoreWin32Handle(size_t gpuIndex, VkSemaphore semaphore)
-{
-    VkSemaphoreGetWin32HandleInfoKHR handleInfo{};
-    handleInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
-    handleInfo.semaphore = semaphore;
-    handleInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-    HANDLE handle = nullptr;
-    auto vkGetSemaphoreWin32HandleKHR = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
-        vkGetDeviceProcAddr(devices[gpuIndex], "vkGetSemaphoreWin32HandleKHR"));
-
-    if (!vkGetSemaphoreWin32HandleKHR)
-    {
-        throw std::runtime_error("Failed to get vkGetSemaphoreWin32HandleKHR function!");
-    }
-
-    if (vkGetSemaphoreWin32HandleKHR(devices[gpuIndex], &handleInfo, &handle) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Failed to get Win32 semaphore handle!");
-    }
-
-    return handle;
-}
-#endif
-
 bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImage& extImage)
 {
     extImage.targetGpuIndex = targetGpuIndex;
@@ -2017,65 +1982,6 @@ bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImag
     return true;
 }
 
-void VulkanBaseRenderer::createExportableSemaphore(size_t sourceGpuIndex, VkSemaphore& semaphore)
-{
-#ifdef _WIN32
-    VkExportSemaphoreCreateInfo exportInfo{};
-    exportInfo.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
-    exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-    VkSemaphoreCreateInfo semaphoreInfo{};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    semaphoreInfo.pNext = &exportInfo;
-
-    if (vkCreateSemaphore(devices[sourceGpuIndex], &semaphoreInfo, nullptr, &semaphore) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Failed to create exportable semaphore!");
-    }
-#else
-    throw std::runtime_error("External semaphore not supported on this platform!");
-#endif
-}
-
-void VulkanBaseRenderer::importExternalSemaphore(size_t targetGpuIndex, ExternalSemaphore& extSem)
-{
-#ifdef _WIN32
-    extSem.sharedHandle = getSemaphoreWin32Handle(extSem.sourceGpuIndex, extSem.sourceSemaphore);
-    extSem.targetGpuIndex = targetGpuIndex;
-
-    VkSemaphoreCreateInfo semaphoreInfo{};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-    if (vkCreateSemaphore(devices[targetGpuIndex], &semaphoreInfo, nullptr, &extSem.importedSemaphore) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Failed to create semaphore for import!");
-    }
-
-    VkImportSemaphoreWin32HandleInfoKHR importInfo{};
-    importInfo.sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR;
-    importInfo.semaphore = extSem.importedSemaphore;
-    importInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-    importInfo.handle = extSem.sharedHandle;
-
-    auto vkImportSemaphoreWin32HandleKHR = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(
-        vkGetDeviceProcAddr(devices[targetGpuIndex], "vkImportSemaphoreWin32HandleKHR"));
-
-    if (!vkImportSemaphoreWin32HandleKHR)
-    {
-        throw std::runtime_error("Failed to get vkImportSemaphoreWin32HandleKHR function!");
-    }
-
-    if (vkImportSemaphoreWin32HandleKHR(devices[targetGpuIndex], &importInfo) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Failed to import semaphore!");
-    }
-
-    std::println("Imported external semaphore from GPU {} to GPU {}", extSem.sourceGpuIndex, targetGpuIndex);
-#else
-    throw std::runtime_error("External semaphore not supported on this platform!");
-#endif
-}
-
 void VulkanBaseRenderer::destroyExternalImage(ExternalImage& extImage)
 {
     if (extImage.importedImageView != VK_NULL_HANDLE)
@@ -2120,26 +2026,4 @@ void VulkanBaseRenderer::destroyExternalImage(ExternalImage& extImage)
         extImage.hostPointer = nullptr;
         extImage.allocationSize = 0;
     }
-}
-
-void VulkanBaseRenderer::destroyExternalSemaphore(ExternalSemaphore& extSem)
-{
-    if (extSem.importedSemaphore != VK_NULL_HANDLE)
-    {
-        vkDestroySemaphore(devices[extSem.targetGpuIndex], extSem.importedSemaphore, nullptr);
-        extSem.importedSemaphore = VK_NULL_HANDLE;
-    }
-    if (extSem.sourceSemaphore != VK_NULL_HANDLE)
-    {
-        vkDestroySemaphore(devices[extSem.sourceGpuIndex], extSem.sourceSemaphore, nullptr);
-        extSem.sourceSemaphore = VK_NULL_HANDLE;
-    }
-
-#ifdef _WIN32
-    if (extSem.sharedHandle != nullptr)
-    {
-        CloseHandle(extSem.sharedHandle);
-        extSem.sharedHandle = nullptr;
-    }
-#endif
 }

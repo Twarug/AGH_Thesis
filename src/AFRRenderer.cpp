@@ -164,7 +164,6 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
     afrFramebuffers.resize(devices.size());
 
     afrExternalImages.resize(devices.size());
-    afrExternalSemaphores.resize(devices.size());
 
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -195,10 +194,6 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
                 cleanupPartialExternalMemoryResources(i);
                 return false;
             }
-
-            createExportableSemaphore(i, afrExternalSemaphores[i].sourceSemaphore);
-            afrExternalSemaphores[i].sourceGpuIndex = i;
-            importExternalSemaphore(mainGPU, afrExternalSemaphores[i]);
         }
 
         afrRenderImageViews[i] = createImageView(devices[i], afrRenderImages[i],
@@ -329,20 +324,11 @@ void VulkanAFRRenderer::cleanupPartialExternalMemoryResources(size_t failedIndex
         }
     }
 
-    for (auto& extSem : afrExternalSemaphores)
-    {
-        if (extSem.sourceSemaphore != VK_NULL_HANDLE)
-        {
-            vkDestroySemaphore(devices[extSem.sourceGpuIndex], extSem.sourceSemaphore, nullptr);
-        }
-    }
-
     afrFramebuffers.clear();
     afrRenderImageViews.clear();
     afrRenderImages.clear();
     afrRenderImageMemories.clear();
     afrExternalImages.clear();
-    afrExternalSemaphores.clear();
 }
 
 void VulkanAFRRenderer::cleanupAFRResources()
@@ -388,12 +374,6 @@ void VulkanAFRRenderer::cleanupAFRResources()
         }
     }
     afrCompositeFences.clear();
-
-    for (auto& extSem : afrExternalSemaphores)
-    {
-        destroyExternalSemaphore(extSem);
-    }
-    afrExternalSemaphores.clear();
 
     for (size_t i = 0; i < afrStagingBuffers.size(); i++)
     {
@@ -592,18 +572,11 @@ void VulkanAFRRenderer::drawFrame()
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffers[renderGPU][imageIndex];
 
+    // Only signal semaphore for same-GPU rendering (GPU-to-GPU sync uses CPU fence wait)
     VkSemaphore renderSignalSemaphore = VK_NULL_HANDLE;
-    if (useExternalMemory && renderGPU != mainGPU)
-    {
-        renderSignalSemaphore = afrExternalSemaphores[renderGPU].sourceSemaphore;
-    }
-    else if (renderGPU == mainGPU)
+    if (renderGPU == mainGPU)
     {
         renderSignalSemaphore = afrRenderCompleteSemaphores[mainGPU];
-    }
-
-    if (renderSignalSemaphore != VK_NULL_HANDLE)
-    {
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &renderSignalSemaphore;
     }
@@ -615,6 +588,12 @@ void VulkanAFRRenderer::drawFrame()
     }
 
     // PHASE 3: Composite on main GPU
+    // For cross-GPU host allocation: wait on CPU for render GPU to finish writing to host memory
+    if (useExternalMemory && renderGPU != mainGPU)
+    {
+        vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
+    }
+
     vkResetCommandBuffer(afrCompositeCommandBuffers[currentFrame], 0);
 
     VkCommandBufferBeginInfo compositeBeginInfo{};
@@ -764,12 +743,9 @@ void VulkanAFRRenderer::drawFrame()
     waitSemaphores.push_back(imageAvailableSemaphores[mainGPU][currentFrame]);
     waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-    if (useExternalMemory && renderGPU != mainGPU)
-    {
-        waitSemaphores.push_back(afrExternalSemaphores[renderGPU].importedSemaphore);
-        waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
-    }
-    else if (renderGPU == mainGPU)
+    // For same-GPU rendering, wait on render complete semaphore
+    // For cross-GPU, CPU fence wait already happened above (host memory is ready)
+    if (renderGPU == mainGPU)
     {
         waitSemaphores.push_back(afrRenderCompleteSemaphores[mainGPU]);
         waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);

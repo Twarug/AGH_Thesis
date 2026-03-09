@@ -44,7 +44,6 @@ private:
 
     bool useExternalMemory = false;
     std::vector<ExternalImage> afrExternalImages;
-    std::vector<ExternalSemaphore> afrExternalSemaphores;
 
     VkImage afrCompositeImage = VK_NULL_HANDLE;
     VkDeviceMemory afrCompositeImageMemory = VK_NULL_HANDLE;

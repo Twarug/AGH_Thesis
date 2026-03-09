@@ -58,7 +58,6 @@ private:
     // External memory for zero-copy cross-GPU transfer (preferred when available)
     bool useExternalMemory = false;
     std::vector<ExternalImage> sfrExternalImages;  // Per non-main GPU
-    std::vector<ExternalSemaphore> sfrExternalSemaphores;  // For cross-GPU synchronization
 
     // Synchronization for parallel rendering
     std::vector<VkSemaphore> sfrRenderCompleteSemaphores;  // Per-GPU: signaled when render finishes

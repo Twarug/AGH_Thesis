@@ -47,18 +47,6 @@ struct ExternalImage {
     uint32_t height = 0;
 };
 
-// Structure for external semaphore - for cross-GPU synchronization
-struct ExternalSemaphore {
-    VkSemaphore sourceSemaphore = VK_NULL_HANDLE;  // On source GPU
-    VkSemaphore importedSemaphore = VK_NULL_HANDLE;  // On target GPU
-    size_t sourceGpuIndex = 0;
-    size_t targetGpuIndex = 0;
-
-#ifdef _WIN32
-    HANDLE sharedHandle = nullptr;
-#endif
-};
-
 
 // Render dimensions (internal framebuffer resolution - 4K for heavy fragment testing)
 // const uint32_t RENDER_WIDTH = 3840;
@@ -425,18 +413,6 @@ public:
     // Import an external image on the target GPU (returns false if import fails)
     bool importExternalImage(size_t targetGpuIndex, ExternalImage& extImage);
 
-    // Create exportable semaphore on source GPU
-    void createExportableSemaphore(size_t sourceGpuIndex, VkSemaphore& semaphore);
-
-    // Import external semaphore on target GPU
-    void importExternalSemaphore(size_t targetGpuIndex, ExternalSemaphore& extSem);
-
     // Cleanup helpers
     void destroyExternalImage(ExternalImage& extImage);
-    void destroyExternalSemaphore(ExternalSemaphore& extSem);
-
-#ifdef _WIN32
-    // Windows-specific handle export/import (semaphores still use Win32 handles)
-    HANDLE getSemaphoreWin32Handle(size_t gpuIndex, VkSemaphore semaphore);
-#endif
 };
