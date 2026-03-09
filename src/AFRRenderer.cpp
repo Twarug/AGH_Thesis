@@ -180,7 +180,8 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
         {
             createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                  afrRenderImages[i], afrRenderImageMemories[i]);
+                                  afrRenderImages[i], afrRenderImageMemories[i],
+                                  afrExternalImages[i].hostPointer, afrExternalImages[i].allocationSize);
 
             afrExternalImages[i].sourceImage = afrRenderImages[i];
             afrExternalImages[i].sourceMemory = afrRenderImageMemories[i];
@@ -438,12 +439,15 @@ void VulkanAFRRenderer::cleanupAFRResources()
             vkDestroyImageView(devices[mainGPU], afrExternalImages[i].importedImageView, nullptr);
             vkDestroyImage(devices[mainGPU], afrExternalImages[i].importedImage, nullptr);
             vkFreeMemory(devices[mainGPU], afrExternalImages[i].importedMemory, nullptr);
+        }
+        if (afrExternalImages[i].hostPointer != nullptr)
+        {
 #ifdef _WIN32
-            if (afrExternalImages[i].sharedHandle != nullptr)
-            {
-                CloseHandle(afrExternalImages[i].sharedHandle);
-            }
+            _aligned_free(afrExternalImages[i].hostPointer);
+#else
+            free(afrExternalImages[i].hostPointer);
 #endif
+            afrExternalImages[i].hostPointer = nullptr;
         }
     }
     afrExternalImages.clear();

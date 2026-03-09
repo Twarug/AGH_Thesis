@@ -13,6 +13,7 @@
 #include <vector>
 #include <optional>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <set>
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include "FileUtils.h"
 
 // Structure for external memory image - holds both the exported and imported resources
+// Uses VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT for cross-vendor GPU sharing
 struct ExternalImage {
     // Source GPU resources (where the image is created and rendered to)
     VkImage sourceImage = VK_NULL_HANDLE;
@@ -36,9 +38,9 @@ struct ExternalImage {
     VkImageView importedImageView = VK_NULL_HANDLE;
     size_t targetGpuIndex = 0;
 
-#ifdef _WIN32
-    HANDLE sharedHandle = nullptr;
-#endif
+    // Shared host allocation (used by both source and target GPUs)
+    void* hostPointer = nullptr;
+    size_t allocationSize = 0;
 
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t width = 0;
@@ -414,10 +416,11 @@ public:
     // Check if external memory can actually be shared between two specific GPUs
     bool checkExternalMemoryCompatible(size_t sourceGpuIndex, size_t targetGpuIndex, VkFormat format);
 
-    // Create an image with exportable memory on the source GPU
+    // Create an image with host-allocation-backed memory on the source GPU
     void createExportableImage(size_t sourceGpuIndex, uint32_t width, uint32_t height,
                                VkFormat format, VkImageUsageFlags usage,
-                               VkImage& image, VkDeviceMemory& memory);
+                               VkImage& image, VkDeviceMemory& memory,
+                               void*& hostPointer, size_t& allocationSize);
 
     // Import an external image on the target GPU (returns false if import fails)
     bool importExternalImage(size_t targetGpuIndex, ExternalImage& extImage);
@@ -433,8 +436,7 @@ public:
     void destroyExternalSemaphore(ExternalSemaphore& extSem);
 
 #ifdef _WIN32
-    // Windows-specific handle export/import
-    HANDLE getMemoryWin32Handle(size_t gpuIndex, VkDeviceMemory memory);
+    // Windows-specific handle export/import (semaphores still use Win32 handles)
     HANDLE getSemaphoreWin32Handle(size_t gpuIndex, VkSemaphore semaphore);
 #endif
 };

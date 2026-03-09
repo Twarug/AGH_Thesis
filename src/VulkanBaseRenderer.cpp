@@ -286,7 +286,7 @@ void VulkanBaseRenderer::pickPhysicalDevices()
     std::sort(scoredDevices.begin(), scoredDevices.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });
 
-    if (forcedGpuIndex >= 0)
+    if (forcedGpuIndex >= 0 && !spoofGPU)
     {
         if (static_cast<size_t>(forcedGpuIndex) >= scoredDevices.size())
         {
@@ -368,12 +368,12 @@ void VulkanBaseRenderer::createLogicalDevices()
             VK_KHR_SWAPCHAIN_EXTENSION_NAME
         };
 
-        if (false && physicalDevices.size() > 1 && checkExternalMemorySupport(physicalDevices[i]))
+        if (physicalDevices.size() > 1 && checkExternalMemorySupport(physicalDevices[i]))
         {
             deviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
             deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
+            deviceExtensions.push_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
 #ifdef _WIN32
-            deviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
             deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
 #endif
             if (i == 0)
@@ -1705,8 +1705,8 @@ bool VulkanBaseRenderer::checkExternalMemorySupport(VkPhysicalDevice device)
     std::set<std::string> requiredExtensions = {
         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
         VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+        VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME,
 #ifdef _WIN32
-        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
         VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME
 #endif
     };
@@ -1721,17 +1721,16 @@ bool VulkanBaseRenderer::checkExternalMemorySupport(VkPhysicalDevice device)
 
 bool VulkanBaseRenderer::checkExternalMemoryCompatible(size_t sourceGpuIndex, size_t targetGpuIndex, VkFormat format)
 {
-#ifdef _WIN32
     VkPhysicalDeviceExternalImageFormatInfo externalFormatInfo{};
     externalFormatInfo.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO;
-    externalFormatInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    externalFormatInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
 
     VkPhysicalDeviceImageFormatInfo2 formatInfo{};
     formatInfo.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
     formatInfo.pNext = &externalFormatInfo;
     formatInfo.format = format;
     formatInfo.type = VK_IMAGE_TYPE_2D;
-    formatInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    formatInfo.tiling = VK_IMAGE_TILING_LINEAR;
     formatInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     VkExternalImageFormatProperties externalProps{};
@@ -1746,16 +1745,16 @@ bool VulkanBaseRenderer::checkExternalMemoryCompatible(size_t sourceGpuIndex, si
 
     if (result != VK_SUCCESS)
     {
-        std::println("External memory: Source GPU {} doesn't support exporting this format", sourceGpuIndex);
+        std::println("External memory: Source GPU {} doesn't support host allocation for this format", sourceGpuIndex);
         return false;
     }
 
-    VkExternalMemoryFeatureFlags exportFeatures =
+    VkExternalMemoryFeatureFlags sourceFeatures =
         externalProps.externalMemoryProperties.externalMemoryFeatures;
 
-    if (!(exportFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT))
+    if (!(sourceFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT))
     {
-        std::println("External memory: Source GPU doesn't support EXPORTABLE");
+        std::println("External memory: Source GPU doesn't support IMPORTABLE for host allocation");
         return false;
     }
 
@@ -1765,33 +1764,30 @@ bool VulkanBaseRenderer::checkExternalMemoryCompatible(size_t sourceGpuIndex, si
 
     if (result != VK_SUCCESS)
     {
-        std::println("External memory: Target GPU {} doesn't support importing this format", targetGpuIndex);
+        std::println("External memory: Target GPU {} doesn't support host allocation for this format", targetGpuIndex);
         return false;
     }
 
-    VkExternalMemoryFeatureFlags importFeatures =
+    VkExternalMemoryFeatureFlags targetFeatures =
         externalProps.externalMemoryProperties.externalMemoryFeatures;
 
-    if (!(importFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT))
+    if (!(targetFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT))
     {
-        std::println("External memory: Target GPU doesn't support IMPORTABLE");
+        std::println("External memory: Target GPU doesn't support IMPORTABLE for host allocation");
         return false;
     }
 
     return true;
-#else
-    return false;
-#endif
 }
 
 void VulkanBaseRenderer::createExportableImage(size_t sourceGpuIndex, uint32_t width, uint32_t height,
                                                VkFormat format, VkImageUsageFlags usage,
-                                               VkImage& image, VkDeviceMemory& memory)
+                                               VkImage& image, VkDeviceMemory& memory,
+                                               void*& hostPointer, size_t& allocationSize)
 {
-#ifdef _WIN32
     VkExternalMemoryImageCreateInfo externalMemoryInfo{};
     externalMemoryInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
-    externalMemoryInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    externalMemoryInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
 
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1803,7 +1799,7 @@ void VulkanBaseRenderer::createExportableImage(size_t sourceGpuIndex, uint32_t w
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.format = format;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -1817,59 +1813,95 @@ void VulkanBaseRenderer::createExportableImage(size_t sourceGpuIndex, uint32_t w
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(devices[sourceGpuIndex], image, &memRequirements);
 
-    VkMemoryDedicatedAllocateInfo dedicatedAllocInfo{};
-    dedicatedAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-    dedicatedAllocInfo.image = image;
-    dedicatedAllocInfo.buffer = VK_NULL_HANDLE;
+    // Query minimum host pointer alignment for this device
+    VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostMemProps{};
+    hostMemProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT;
+    VkPhysicalDeviceProperties2 deviceProps2{};
+    deviceProps2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    deviceProps2.pNext = &hostMemProps;
+    vkGetPhysicalDeviceProperties2(physicalDevices[sourceGpuIndex], &deviceProps2);
 
-    VkExportMemoryAllocateInfo exportAllocInfo{};
-    exportAllocInfo.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
-    exportAllocInfo.pNext = &dedicatedAllocInfo;
-    exportAllocInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    VkDeviceSize alignment = std::max(memRequirements.alignment, hostMemProps.minImportedHostPointerAlignment);
+    VkDeviceSize alignedSize = (memRequirements.size + alignment - 1) & ~(alignment - 1);
+
+    // Allocate aligned host memory
+    void* hostPtr =
+#ifdef _WIN32
+        _aligned_malloc(static_cast<size_t>(alignedSize), static_cast<size_t>(alignment));
+#else
+        aligned_alloc(static_cast<size_t>(alignment), static_cast<size_t>(alignedSize));
+#endif
+    if (!hostPtr)
+    {
+        vkDestroyImage(devices[sourceGpuIndex], image, nullptr);
+        image = VK_NULL_HANDLE;
+        throw std::runtime_error("Failed to allocate aligned host memory!");
+    }
+
+    // Query which memory types are compatible with this host pointer
+    auto vkGetMemoryHostPointerPropertiesEXT = reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
+        vkGetDeviceProcAddr(devices[sourceGpuIndex], "vkGetMemoryHostPointerPropertiesEXT"));
+
+    if (!vkGetMemoryHostPointerPropertiesEXT)
+    {
+#ifdef _WIN32
+        _aligned_free(hostPtr);
+#else
+        free(hostPtr);
+#endif
+        vkDestroyImage(devices[sourceGpuIndex], image, nullptr);
+        image = VK_NULL_HANDLE;
+        throw std::runtime_error("Failed to get vkGetMemoryHostPointerPropertiesEXT function!");
+    }
+
+    VkMemoryHostPointerPropertiesEXT hostPointerProps{};
+    hostPointerProps.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
+    if (vkGetMemoryHostPointerPropertiesEXT(devices[sourceGpuIndex],
+                                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                            hostPtr, &hostPointerProps) != VK_SUCCESS)
+    {
+#ifdef _WIN32
+        _aligned_free(hostPtr);
+#else
+        free(hostPtr);
+#endif
+        vkDestroyImage(devices[sourceGpuIndex], image, nullptr);
+        image = VK_NULL_HANDLE;
+        throw std::runtime_error("Failed to get host pointer memory properties!");
+    }
+
+    VkImportMemoryHostPointerInfoEXT importHostPtrInfo{};
+    importHostPtrInfo.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+    importHostPtrInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    importHostPtrInfo.pHostPointer = hostPtr;
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.pNext = &exportAllocInfo;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(sourceGpuIndex, memRequirements.memoryTypeBits,
-                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    allocInfo.pNext = &importHostPtrInfo;
+    allocInfo.allocationSize = alignedSize;
+    allocInfo.memoryTypeIndex = findMemoryType(sourceGpuIndex,
+                                               memRequirements.memoryTypeBits & hostPointerProps.memoryTypeBits,
+                                               0);
 
     if (vkAllocateMemory(devices[sourceGpuIndex], &allocInfo, nullptr, &memory) != VK_SUCCESS)
     {
+#ifdef _WIN32
+        _aligned_free(hostPtr);
+#else
+        free(hostPtr);
+#endif
+        vkDestroyImage(devices[sourceGpuIndex], image, nullptr);
+        image = VK_NULL_HANDLE;
         throw std::runtime_error("Failed to allocate exportable image memory!");
     }
 
     vkBindImageMemory(devices[sourceGpuIndex], image, memory, 0);
-#else
-    throw std::runtime_error("External memory not supported on this platform!");
-#endif
+
+    hostPointer = hostPtr;
+    allocationSize = static_cast<size_t>(alignedSize);
 }
 
 #ifdef _WIN32
-HANDLE VulkanBaseRenderer::getMemoryWin32Handle(size_t gpuIndex, VkDeviceMemory memory)
-{
-    VkMemoryGetWin32HandleInfoKHR handleInfo{};
-    handleInfo.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
-    handleInfo.memory = memory;
-    handleInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-    HANDLE handle = nullptr;
-    auto vkGetMemoryWin32HandleKHR = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(
-        vkGetDeviceProcAddr(devices[gpuIndex], "vkGetMemoryWin32HandleKHR"));
-
-    if (!vkGetMemoryWin32HandleKHR)
-    {
-        throw std::runtime_error("Failed to get vkGetMemoryWin32HandleKHR function!");
-    }
-
-    if (vkGetMemoryWin32HandleKHR(devices[gpuIndex], &handleInfo, &handle) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Failed to get Win32 memory handle!");
-    }
-
-    return handle;
-}
-
 HANDLE VulkanBaseRenderer::getSemaphoreWin32Handle(size_t gpuIndex, VkSemaphore semaphore)
 {
     VkSemaphoreGetWin32HandleInfoKHR handleInfo{};
@@ -1897,13 +1929,11 @@ HANDLE VulkanBaseRenderer::getSemaphoreWin32Handle(size_t gpuIndex, VkSemaphore 
 
 bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImage& extImage)
 {
-#ifdef _WIN32
-    extImage.sharedHandle = getMemoryWin32Handle(extImage.sourceGpuIndex, extImage.sourceMemory);
     extImage.targetGpuIndex = targetGpuIndex;
 
     VkExternalMemoryImageCreateInfo externalMemoryInfo{};
     externalMemoryInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
-    externalMemoryInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    externalMemoryInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
 
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1915,7 +1945,7 @@ bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImag
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.format = extImage.format;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -1930,36 +1960,50 @@ bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImag
     VkMemoryRequirements memRequirements;
     vkGetImageMemoryRequirements(devices[targetGpuIndex], extImage.importedImage, &memRequirements);
 
-    VkMemoryDedicatedAllocateInfo dedicatedAllocInfo{};
-    dedicatedAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-    dedicatedAllocInfo.image = extImage.importedImage;
-    dedicatedAllocInfo.buffer = VK_NULL_HANDLE;
+    // Query compatible memory types for the host pointer on the target GPU
+    auto vkGetMemoryHostPointerPropertiesEXT = reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
+        vkGetDeviceProcAddr(devices[targetGpuIndex], "vkGetMemoryHostPointerPropertiesEXT"));
 
-    VkImportMemoryWin32HandleInfoKHR importMemoryInfo{};
-    importMemoryInfo.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
-    importMemoryInfo.pNext = &dedicatedAllocInfo;
-    importMemoryInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-    importMemoryInfo.handle = extImage.sharedHandle;
+    if (!vkGetMemoryHostPointerPropertiesEXT)
+    {
+        vkDestroyImage(devices[targetGpuIndex], extImage.importedImage, nullptr);
+        extImage.importedImage = VK_NULL_HANDLE;
+        std::println(stderr, "External memory: Failed to get vkGetMemoryHostPointerPropertiesEXT on GPU {}", targetGpuIndex);
+        return false;
+    }
+
+    VkMemoryHostPointerPropertiesEXT hostPointerProps{};
+    hostPointerProps.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
+    if (vkGetMemoryHostPointerPropertiesEXT(devices[targetGpuIndex],
+                                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                            extImage.hostPointer, &hostPointerProps) != VK_SUCCESS)
+    {
+        vkDestroyImage(devices[targetGpuIndex], extImage.importedImage, nullptr);
+        extImage.importedImage = VK_NULL_HANDLE;
+        std::println(stderr, "External memory: Failed to get host pointer properties on GPU {}", targetGpuIndex);
+        return false;
+    }
+
+    VkImportMemoryHostPointerInfoEXT importHostPtrInfo{};
+    importHostPtrInfo.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+    importHostPtrInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    importHostPtrInfo.pHostPointer = extImage.hostPointer;
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.pNext = &importMemoryInfo;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(targetGpuIndex, memRequirements.memoryTypeBits,
-                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    allocInfo.pNext = &importHostPtrInfo;
+    allocInfo.allocationSize = extImage.allocationSize;
+    allocInfo.memoryTypeIndex = findMemoryType(targetGpuIndex,
+                                               memRequirements.memoryTypeBits & hostPointerProps.memoryTypeBits,
+                                               0);
 
     if (vkAllocateMemory(devices[targetGpuIndex], &allocInfo, nullptr, &extImage.importedMemory) != VK_SUCCESS)
     {
         vkDestroyImage(devices[targetGpuIndex], extImage.importedImage, nullptr);
         extImage.importedImage = VK_NULL_HANDLE;
-        if (extImage.sharedHandle)
-        {
-            CloseHandle(extImage.sharedHandle);
-            extImage.sharedHandle = nullptr;
-        }
         std::println(
             stderr,
-            "External memory: Failed to import memory from GPU {} to GPU {} (cross-device sharing not supported)",
+            "External memory: Failed to import host memory from GPU {} to GPU {}",
             extImage.sourceGpuIndex, targetGpuIndex);
         return false;
     }
@@ -1969,12 +2013,8 @@ bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImag
     extImage.importedImageView = createImageView(devices[targetGpuIndex], extImage.importedImage,
                                                  extImage.format, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    std::println("Imported external image from GPU {} to GPU {}", extImage.sourceGpuIndex, targetGpuIndex);
+    std::println("Imported external image from GPU {} to GPU {} via host allocation", extImage.sourceGpuIndex, targetGpuIndex);
     return true;
-#else
-    std::println(stderr, "External memory not supported on this platform!");
-    return false;
-#endif
 }
 
 void VulkanBaseRenderer::createExportableSemaphore(size_t sourceGpuIndex, VkSemaphore& semaphore)
@@ -2070,13 +2110,16 @@ void VulkanBaseRenderer::destroyExternalImage(ExternalImage& extImage)
         extImage.sourceMemory = VK_NULL_HANDLE;
     }
 
-#ifdef _WIN32
-    if (extImage.sharedHandle != nullptr)
+    if (extImage.hostPointer != nullptr)
     {
-        CloseHandle(extImage.sharedHandle);
-        extImage.sharedHandle = nullptr;
-    }
+#ifdef _WIN32
+        _aligned_free(extImage.hostPointer);
+#else
+        free(extImage.hostPointer);
 #endif
+        extImage.hostPointer = nullptr;
+        extImage.allocationSize = 0;
+    }
 }
 
 void VulkanBaseRenderer::destroyExternalSemaphore(ExternalSemaphore& extSem)
