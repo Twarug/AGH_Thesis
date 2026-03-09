@@ -48,9 +48,10 @@ BenchmarkSuite BenchmarkRunner::runCase(const BenchmarkCase& benchmarkCase)
 
     BenchmarkSuite suite(caseOutputDir);
 
+    size_t gpuCount = VulkanBaseRenderer::countAvailableGPUs();
+
     if (config.runSingleGPU && benchmarkCase.runSingleGPU())
     {
-        size_t gpuCount = VulkanBaseRenderer::countAvailableGPUs();
         std::println("Running SingleGPU benchmarks on {} GPU(s)", gpuCount);
 
         for (size_t gpuIndex = 0; gpuIndex < gpuCount; ++gpuIndex)
@@ -61,20 +62,24 @@ BenchmarkSuite BenchmarkRunner::runCase(const BenchmarkCase& benchmarkCase)
         }
     }
 
-    if (config.runSFR && benchmarkCase.runSFR())
+    if (config.runSFR && benchmarkCase.runSFR() && gpuCount > 1)
     {
         auto renderer = std::make_unique<VulkanSFRRenderer>();
         suite.addBenchmark(runRenderer(benchmarkCase, std::move(renderer), "SFR"));
     }
 
-    if (config.runAFR && benchmarkCase.runAFR())
+    if (config.runAFR && benchmarkCase.runAFR() && gpuCount > 1)
     {
         auto renderer = std::make_unique<VulkanAFRRenderer>();
         suite.addBenchmark(runRenderer(benchmarkCase, std::move(renderer), "AFR"));
     }
 
     suite.printAllStats();
-    suite.exportAll();
+
+    if (!suite.exportAll())
+    {
+        throw std::runtime_error("Failed to export all cases");
+    }
 
     return suite;
 }
