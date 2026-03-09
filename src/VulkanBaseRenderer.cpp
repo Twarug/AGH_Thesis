@@ -618,13 +618,7 @@ void VulkanBaseRenderer::createGraphicsPipelines()
         inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-        VkViewport viewport = getFrameViewport(i);
-
-        VkRect2D scissor{};
-        scissor.offset = {static_cast<int32_t>(viewport.x), static_cast<int32_t>(viewport.y)};
-        scissor.extent = {static_cast<uint32_t>(viewport.width), static_cast<uint32_t>(viewport.height)};
-
-        std::vector<VkDynamicState> dynamicStates = {
+        std::vector dynamicStates = {
             VK_DYNAMIC_STATE_VIEWPORT,
             VK_DYNAMIC_STATE_SCISSOR
         };
@@ -987,8 +981,10 @@ glm::mat4 VulkanBaseRenderer::getViewMatrix(size_t gpuIndex)
 
 glm::mat4 VulkanBaseRenderer::getProjectionMatrix(size_t gpuIndex)
 {
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), RENDER_WIDTH / static_cast<float>(RENDER_HEIGHT), 0.1f,
-                                      500.0f);
+    glm::mat4 proj = glm::perspective(
+        glm::radians(45.0f),
+        RENDER_WIDTH / static_cast<float>(RENDER_HEIGHT),
+        0.1f, 500.0f);
     proj[1][1] *= -1;
     return proj;
 }

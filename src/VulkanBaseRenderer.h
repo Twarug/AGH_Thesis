@@ -336,7 +336,10 @@ protected:
     }
 
     virtual void drawFrame() = 0; // Pure virtual - implemented by derived classes
-    virtual VkViewport getFrameViewport(uint32_t gpuIndex) { return {0, 0, RENDER_WIDTH, RENDER_HEIGHT, 0, 1,}; }
+    virtual VkViewport getFrameViewport(uint32_t gpuIndex)
+    {
+        return {0, 0, RENDER_WIDTH, RENDER_HEIGHT, 0, 1,};
+    }
 
     // Common single-GPU rendering path - renders directly to swapchain
     virtual void drawFrameSingleGPU();

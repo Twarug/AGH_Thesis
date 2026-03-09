@@ -37,20 +37,6 @@ protected:
 private:
     int gpuIndex_ = 0;
 
-    // Single GPU renders at window resolution directly to swapchain
-    VkViewport getFrameViewport(uint32_t gpuIndex) override
-    {
-        return {0, 0, static_cast<float>(RENDER_WIDTH), static_cast<float>(RENDER_HEIGHT), 0, 1};
-    }
-
-    // Use window resolution for projection aspect ratio
-    glm::mat4 getProjectionMatrix(size_t gpuIndex) override
-    {
-        glm::mat4 proj = glm::perspective(glm::radians(45.0f),
-                                          RENDER_WIDTH / static_cast<float>(RENDER_HEIGHT), 0.1f, 500.0f);
-        proj[1][1] *= -1; // Vulkan Y-flip
-        return proj;
-    }
 
     void drawFrame() override
     {

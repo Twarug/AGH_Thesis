@@ -69,13 +69,13 @@ void VulkanSFRRenderer::createMultiGpuRenderPasses()
 
 void VulkanSFRRenderer::createSFRResources()
 {
-        createMultiGpuRenderPasses();
+    createMultiGpuRenderPasses();
 
-        useExternalMemory = externalMemorySupported && devices.size() > 1;
+    useExternalMemory = externalMemorySupported && devices.size() > 1;
 
     if (useExternalMemory)
     {
-                if (!checkExternalMemoryCompatible(1, 0, swapChainImageFormats[0]))
+        if (!checkExternalMemoryCompatible(1, 0, swapChainImageFormats[0]))
         {
             std::println("SFR: External memory not compatible between GPUs, using staging buffers");
             useExternalMemory = false;
@@ -98,14 +98,14 @@ void VulkanSFRRenderer::createSFRResources()
         createStagingBufferResources();
     }
 
-        size_t mainGPU = 0;
+    size_t mainGPU = 0;
     createImage(mainGPU, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
                 VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 sfrCompositeImage, sfrCompositeImageMemory);
 
-        sfrRenderCompleteSemaphores.resize(devices.size());
+    sfrRenderCompleteSemaphores.resize(devices.size());
     for (size_t i = 0; i < devices.size(); i++)
     {
         VkSemaphoreCreateInfo semaphoreInfo{};
@@ -116,7 +116,7 @@ void VulkanSFRRenderer::createSFRResources()
         }
     }
 
-            size_t swapchainImageCount = swapChainImages[mainGPU].size();
+    size_t swapchainImageCount = swapChainImages[mainGPU].size();
     sfrPresentReadySemaphores.resize(swapchainImageCount);
     for (size_t i = 0; i < swapchainImageCount; i++)
     {
@@ -128,7 +128,7 @@ void VulkanSFRRenderer::createSFRResources()
         }
     }
 
-        sfrCompositeCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    sfrCompositeCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = commandPools[mainGPU];
@@ -139,7 +139,7 @@ void VulkanSFRRenderer::createSFRResources()
         throw std::runtime_error("Failed to allocate SFR composite command buffers!");
     }
 
-        sfrCompositeFences.resize(MAX_FRAMES_IN_FLIGHT);
+    sfrCompositeFences.resize(MAX_FRAMES_IN_FLIGHT);
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
         VkFenceCreateInfo fenceInfo{};
@@ -171,7 +171,7 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
     {
         if (i == mainGPU)
         {
-                        createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+            createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
                         VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -179,20 +179,20 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
         }
         else
         {
-                        createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
+            createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormats[0],
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                   sfrRenderImages[i], sfrRenderImageMemories[i]);
 
-                        sfrExternalImages[i].sourceImage = sfrRenderImages[i];
+            sfrExternalImages[i].sourceImage = sfrRenderImages[i];
             sfrExternalImages[i].sourceMemory = sfrRenderImageMemories[i];
             sfrExternalImages[i].sourceGpuIndex = i;
             sfrExternalImages[i].format = swapChainImageFormats[0];
             sfrExternalImages[i].width = RENDER_WIDTH;
             sfrExternalImages[i].height = RENDER_HEIGHT;
 
-                        if (!importExternalImage(mainGPU, sfrExternalImages[i]))
+            if (!importExternalImage(mainGPU, sfrExternalImages[i]))
             {
-                                cleanupPartialExternalMemoryResources(i);
+                cleanupPartialExternalMemoryResources(i);
                 return false;
             }
 
@@ -202,7 +202,7 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
         }
 
         sfrRenderImageViews[i] = createImageView(devices[i], sfrRenderImages[i],
-                                                  swapChainImageFormats[0], VK_IMAGE_ASPECT_COLOR_BIT);
+                                                 swapChainImageFormats[0], VK_IMAGE_ASPECT_COLOR_BIT);
 
         std::array<VkImageView, 2> attachments = {
             sfrRenderImageViews[i],
@@ -214,7 +214,7 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
         framebufferInfo.renderPass = multiGpuRenderPasses[i];
         framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
         framebufferInfo.pAttachments = attachments.data();
-        framebufferInfo.width = RENDER_WIDTH;
+        framebufferInfo.width = RENDER_WIDTH / devices.size();
         framebufferInfo.height = RENDER_HEIGHT;
         framebufferInfo.layers = 1;
 
@@ -277,7 +277,8 @@ void VulkanSFRRenderer::createStagingBufferResources()
         VkDeviceSize bufferSize = RENDER_WIDTH * sectionHeight * 4;
         if (i == 0 && devices.size() > 1)
         {
-            bufferSize = RENDER_WIDTH * RENDER_HEIGHT * 4;        }
+            bufferSize = RENDER_WIDTH * RENDER_HEIGHT * 4;
+        }
         createBuffer(i, bufferSize,
                      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -415,7 +416,8 @@ void VulkanSFRRenderer::cleanupSFRResources()
     }
     sfrRenderImageViews.clear();
 
-    for (size_t i = 1; i < sfrExternalImages.size(); i++)    {
+    for (size_t i = 1; i < sfrExternalImages.size(); i++)
+    {
         if (sfrExternalImages[i].importedImage != VK_NULL_HANDLE)
         {
             vkDestroyImageView(devices[mainGPU], sfrExternalImages[i].importedImageView, nullptr);
@@ -464,9 +466,9 @@ VkViewport VulkanSFRRenderer::getFrameViewport(uint32_t gpuIndex)
 {
     VkViewport viewport{};
     viewport.x = 0.0f;
-    viewport.y = 0.0f;
+    viewport.y = static_cast<float>(RENDER_HEIGHT) / devices.size() * gpuIndex;
     viewport.width = static_cast<float>(RENDER_WIDTH);
-    viewport.height = static_cast<float>(RENDER_HEIGHT);
+    viewport.height = static_cast<float>(RENDER_HEIGHT) / devices.size();
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     return viewport;
@@ -474,10 +476,38 @@ VkViewport VulkanSFRRenderer::getFrameViewport(uint32_t gpuIndex)
 
 glm::mat4 VulkanSFRRenderer::getProjectionMatrix(size_t gpuIndex)
 {
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f),
-                                       RENDER_WIDTH / static_cast<float>(RENDER_HEIGHT),
-                                       0.1f, 500.0f);
-    proj[1][1] *= -1;    return proj;
+    float zNear = 0;
+    float zFar = 500;
+    float fovY = 45;
+    float aspect = static_cast<float>(RENDER_WIDTH) / static_cast<float>(RENDER_HEIGHT);
+
+    // 1. Calculate the full height/width at the near plane
+    float halfHeight = zNear * glm::tan(fovY * 0.5f);
+    float halfWidth  = halfHeight * aspect;
+
+    // Standard bounds (GLM/OpenGL style: bottom is negative, top is positive)
+    float fullTop    =  halfHeight;
+    float fullBottom = -halfHeight;
+    float left       = -halfWidth;
+    float right      =  halfWidth;
+
+    // 2. Calculate the height of a single strip
+    float totalHeight = fullTop - fullBottom;
+    float stripHeight = totalHeight / static_cast<float>(devices.size());
+
+    // 3. Define the vertical bounds for this strip
+    // Index 0 is the top strip, so we start from fullTop and subtract
+    float stripTop    = fullTop - (gpuIndex * stripHeight);
+    float stripBottom = fullTop - ((gpuIndex + 1) * stripHeight);
+
+    // 4. Create the off-center frustum
+    // glm::frustum(left, right, bottom, top, near, far)
+    glm::mat4 proj = glm::frustum(left, right, stripBottom, stripTop, zNear, zFar);
+
+    // 5. Vulkan Y-Flip: Invert the Y axis to match Vulkan's clip space (Y-down)
+    proj[1][1] *= -1.0f;
+
+    return proj;
 }
 
 VkCommandBuffer VulkanSFRRenderer::beginSingleTimeCommands(size_t gpuIndex)
@@ -753,8 +783,10 @@ void VulkanSFRRenderer::drawFrame()
         blitRegion.dstSubresource.baseArrayLayer = 0;
         blitRegion.dstSubresource.layerCount = 1;
         blitRegion.dstOffsets[0] = {0, 0, 0};
-        blitRegion.dstOffsets[1] = {static_cast<int32_t>(swapChainExtents[mainGPU].width),
-                                    static_cast<int32_t>(swapChainExtents[mainGPU].height), 1};
+        blitRegion.dstOffsets[1] = {
+            static_cast<int32_t>(swapChainExtents[mainGPU].width),
+            static_cast<int32_t>(swapChainExtents[mainGPU].height), 1
+        };
 
         vkCmdBlitImage(compositeCmd,
                        sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -870,8 +902,10 @@ void VulkanSFRRenderer::drawFrame()
         blitRegion.dstSubresource.baseArrayLayer = 0;
         blitRegion.dstSubresource.layerCount = 1;
         blitRegion.dstOffsets[0] = {0, 0, 0};
-        blitRegion.dstOffsets[1] = {static_cast<int32_t>(swapChainExtents[mainGPU].width),
-                                    static_cast<int32_t>(swapChainExtents[mainGPU].height), 1};
+        blitRegion.dstOffsets[1] = {
+            static_cast<int32_t>(swapChainExtents[mainGPU].width),
+            static_cast<int32_t>(swapChainExtents[mainGPU].height), 1
+        };
 
         vkCmdBlitImage(compositeCmd,
                        sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

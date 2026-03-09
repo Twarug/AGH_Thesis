@@ -5,6 +5,7 @@
 #include "AFRRenderer.h"
 
 #include <filesystem>
+#include <iostream>
 #include <print>
 
 Benchmark BenchmarkRunner::runRenderer(const BenchmarkCase& benchmarkCase,
@@ -62,13 +63,13 @@ BenchmarkSuite BenchmarkRunner::runCase(const BenchmarkCase& benchmarkCase)
         }
     }
 
-    if (config.runSFR && benchmarkCase.runSFR() && gpuCount > 1)
+    if (config.runSFR && benchmarkCase.runSFR())
     {
         auto renderer = std::make_unique<VulkanSFRRenderer>();
         suite.addBenchmark(runRenderer(benchmarkCase, std::move(renderer), "SFR"));
     }
 
-    if (config.runAFR && benchmarkCase.runAFR() && gpuCount > 1)
+    if (config.runAFR && benchmarkCase.runAFR())
     {
         auto renderer = std::make_unique<VulkanAFRRenderer>();
         suite.addBenchmark(runRenderer(benchmarkCase, std::move(renderer), "AFR"));
@@ -96,7 +97,7 @@ std::vector<BenchmarkSuite> BenchmarkRunner::runCases(const std::vector<std::str
         auto benchmarkCase = registry.createCase(name);
         if (!benchmarkCase)
         {
-            std::println(stderr, "Unknown benchmark case: {}", name);
+            std::println(std::cerr, "Unknown benchmark case: {}", name);
             continue;
         }
 
