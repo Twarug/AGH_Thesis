@@ -57,9 +57,6 @@ struct ExternalSemaphore {
 #endif
 };
 
-// Window dimensions (actual window size)
-const uint32_t WINDOW_WIDTH = 1280;
-const uint32_t WINDOW_HEIGHT = 720;
 
 // Render dimensions (internal framebuffer resolution - 4K for heavy fragment testing)
 const uint32_t RENDER_WIDTH = 3840;
@@ -263,7 +260,7 @@ protected:
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-        window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, getWindowTitle(), nullptr, nullptr);
+        window = glfwCreateWindow(RENDER_WIDTH, RENDER_HEIGHT, getWindowTitle(), nullptr, nullptr);
     }
 
     virtual void initVulkan()
