@@ -1,5 +1,7 @@
 #include "VulkanBaseRenderer.h"
 
+constexpr bool spoofGPU = true;
+
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -255,7 +257,7 @@ size_t VulkanBaseRenderer::countAvailableGPUs()
     glfwDestroyWindow(tempWindow);
     glfwTerminate();
 
-    return suitableCount;
+    return suitableCount + (spoofGPU && suitableCount == 1 ? 1 : 0);
 }
 
 void VulkanBaseRenderer::pickPhysicalDevices()
@@ -313,7 +315,7 @@ void VulkanBaseRenderer::pickPhysicalDevices()
         }
     }
 
-    if (physicalDevices.size() == 1)
+    if (spoofGPU && physicalDevices.size() == 1)
     {
         physicalDevices.push_back(physicalDevices[0]);
         std::println("Spoofing GPU");
