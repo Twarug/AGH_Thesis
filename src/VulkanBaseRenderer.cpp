@@ -1680,6 +1680,13 @@ void VulkanBaseRenderer::transitionImageLayout(VkCommandBuffer commandBuffer, Vk
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     }
+    else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+    {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
     else
     {
         throw std::invalid_argument("Unsupported layout transition!");
@@ -1722,7 +1729,7 @@ bool VulkanBaseRenderer::checkExternalMemoryCompatible(size_t sourceGpuIndex, si
     formatInfo.format = format;
     formatInfo.type = VK_IMAGE_TYPE_2D;
     formatInfo.tiling = VK_IMAGE_TILING_LINEAR;
-    formatInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    formatInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     VkExternalImageFormatProperties externalProps{};
     externalProps.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES;
@@ -1974,9 +1981,6 @@ bool VulkanBaseRenderer::importExternalImage(size_t targetGpuIndex, ExternalImag
     }
 
     vkBindImageMemory(devices[targetGpuIndex], extImage.importedImage, extImage.importedMemory, 0);
-
-    extImage.importedImageView = createImageView(devices[targetGpuIndex], extImage.importedImage,
-                                                 extImage.format, VK_IMAGE_ASPECT_COLOR_BIT);
 
     std::println("Imported external image from GPU {} to GPU {} via host allocation", extImage.sourceGpuIndex, targetGpuIndex);
     return true;

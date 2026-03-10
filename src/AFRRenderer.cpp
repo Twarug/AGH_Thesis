@@ -177,13 +177,19 @@ bool VulkanAFRRenderer::createExternalMemoryResources()
         }
         else
         {
+            // Render target: device-local, optimal-tiled (LINEAR tiling can't reliably be used as color attachment)
+            createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
+                        VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        afrRenderImages[i], afrRenderImageMemories[i]);
+
+            // External memory image: host-memory, linear-tiled (for cross-GPU transfer)
             createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
-                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                  afrRenderImages[i], afrRenderImageMemories[i],
+                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                  afrExternalImages[i].sourceImage, afrExternalImages[i].sourceMemory,
                                   afrExternalImages[i].hostPointer, afrExternalImages[i].allocationSize);
 
-            afrExternalImages[i].sourceImage = afrRenderImages[i];
-            afrExternalImages[i].sourceMemory = afrRenderImageMemories[i];
             afrExternalImages[i].sourceGpuIndex = i;
             afrExternalImages[i].format = swapChainImageFormat;
             afrExternalImages[i].width = RENDER_WIDTH;
@@ -324,6 +330,11 @@ void VulkanAFRRenderer::cleanupPartialExternalMemoryResources(size_t failedIndex
         }
     }
 
+    for (size_t i = 0; i < afrExternalImages.size(); i++)
+    {
+        destroyExternalImage(afrExternalImages[i]);
+    }
+
     afrFramebuffers.clear();
     afrRenderImageViews.clear();
     afrRenderImages.clear();
@@ -416,9 +427,13 @@ void VulkanAFRRenderer::cleanupAFRResources()
     {
         if (afrExternalImages[i].importedImage != VK_NULL_HANDLE)
         {
-            vkDestroyImageView(devices[mainGPU], afrExternalImages[i].importedImageView, nullptr);
             vkDestroyImage(devices[mainGPU], afrExternalImages[i].importedImage, nullptr);
             vkFreeMemory(devices[mainGPU], afrExternalImages[i].importedMemory, nullptr);
+        }
+        if (afrExternalImages[i].sourceImage != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(devices[i], afrExternalImages[i].sourceImage, nullptr);
+            vkFreeMemory(devices[i], afrExternalImages[i].sourceMemory, nullptr);
         }
         if (afrExternalImages[i].hostPointer != nullptr)
         {
@@ -547,6 +562,32 @@ void VulkanAFRRenderer::drawFrame()
     recordDrawCommands(commandBuffers[renderGPU][imageIndex], renderGPU, imageIndex, viewport, scissor);
 
     vkCmdEndRenderPass(commandBuffers[renderGPU][imageIndex]);
+
+    // After render pass, afrRenderImages[renderGPU] is in TRANSFER_SRC_OPTIMAL
+    // Copy render result to the external memory image for cross-GPU transfer
+    if (useExternalMemory && renderGPU != mainGPU)
+    {
+        transitionImageLayout(commandBuffers[renderGPU][imageIndex], afrExternalImages[renderGPU].sourceImage,
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkImageCopy copyRegion{};
+        copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.srcSubresource.mipLevel = 0;
+        copyRegion.srcSubresource.baseArrayLayer = 0;
+        copyRegion.srcSubresource.layerCount = 1;
+        copyRegion.srcOffset = {0, 0, 0};
+        copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.dstSubresource.mipLevel = 0;
+        copyRegion.dstSubresource.baseArrayLayer = 0;
+        copyRegion.dstSubresource.layerCount = 1;
+        copyRegion.dstOffset = {0, 0, 0};
+        copyRegion.extent = {RENDER_WIDTH, RENDER_HEIGHT, 1};
+
+        vkCmdCopyImage(commandBuffers[renderGPU][imageIndex],
+                       afrRenderImages[renderGPU], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       afrExternalImages[renderGPU].sourceImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &copyRegion);
+    }
 
     if (!useExternalMemory)
     {

@@ -162,7 +162,7 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
     {
         if (i == mainGPU)
         {
-            createImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
+            createImage(i, RENDER_WIDTH, sectionHeight, swapChainImageFormat,
                         VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -170,17 +170,23 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
         }
         else
         {
-            createExportableImage(i, RENDER_WIDTH, RENDER_HEIGHT, swapChainImageFormat,
-                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                  sfrRenderImages[i], sfrRenderImageMemories[i],
+            // Render target: device-local, optimal-tiled (LINEAR tiling can't reliably be used as color attachment)
+            createImage(i, RENDER_WIDTH, sectionHeight, swapChainImageFormat,
+                        VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        sfrRenderImages[i], sfrRenderImageMemories[i]);
+
+            // External memory image: host-memory, linear-tiled (for cross-GPU transfer)
+            createExportableImage(i, RENDER_WIDTH, sectionHeight, swapChainImageFormat,
+                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                  sfrExternalImages[i].sourceImage, sfrExternalImages[i].sourceMemory,
                                   sfrExternalImages[i].hostPointer, sfrExternalImages[i].allocationSize);
 
-            sfrExternalImages[i].sourceImage = sfrRenderImages[i];
-            sfrExternalImages[i].sourceMemory = sfrRenderImageMemories[i];
             sfrExternalImages[i].sourceGpuIndex = i;
             sfrExternalImages[i].format = swapChainImageFormat;
             sfrExternalImages[i].width = RENDER_WIDTH;
-            sfrExternalImages[i].height = RENDER_HEIGHT;
+            sfrExternalImages[i].height = sectionHeight;
 
             if (!importExternalImage(mainGPU, sfrExternalImages[i]))
             {
@@ -202,8 +208,8 @@ bool VulkanSFRRenderer::createExternalMemoryResources()
         framebufferInfo.renderPass = multiGpuRenderPasses[i];
         framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
         framebufferInfo.pAttachments = attachments.data();
-        framebufferInfo.width = RENDER_WIDTH / devices.size();
-        framebufferInfo.height = RENDER_HEIGHT;
+        framebufferInfo.width = RENDER_WIDTH;
+        framebufferInfo.height = sectionHeight;
         framebufferInfo.layers = 1;
 
         if (vkCreateFramebuffer(devices[i], &framebufferInfo, nullptr, &sfrFramebuffers[i]) != VK_SUCCESS)
@@ -303,6 +309,11 @@ void VulkanSFRRenderer::cleanupPartialExternalMemoryResources(size_t failedIndex
         }
     }
 
+    for (size_t i = 0; i < sfrExternalImages.size(); i++)
+    {
+        destroyExternalImage(sfrExternalImages[i]);
+    }
+
     sfrFramebuffers.clear();
     sfrRenderImageViews.clear();
     sfrRenderImages.clear();
@@ -395,9 +406,13 @@ void VulkanSFRRenderer::cleanupSFRResources()
     {
         if (sfrExternalImages[i].importedImage != VK_NULL_HANDLE)
         {
-            vkDestroyImageView(devices[mainGPU], sfrExternalImages[i].importedImageView, nullptr);
             vkDestroyImage(devices[mainGPU], sfrExternalImages[i].importedImage, nullptr);
             vkFreeMemory(devices[mainGPU], sfrExternalImages[i].importedMemory, nullptr);
+        }
+        if (sfrExternalImages[i].sourceImage != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(devices[i], sfrExternalImages[i].sourceImage, nullptr);
+            vkFreeMemory(devices[i], sfrExternalImages[i].sourceMemory, nullptr);
         }
         if (sfrExternalImages[i].hostPointer != nullptr)
         {
@@ -436,7 +451,7 @@ VkViewport VulkanSFRRenderer::getFrameViewport(uint32_t gpuIndex) const
 {
     VkViewport viewport{};
     viewport.x = 0.0f;
-    viewport.y = static_cast<float>(RENDER_HEIGHT) / devices.size() * gpuIndex;
+    viewport.y = 0.0f;
     viewport.width = static_cast<float>(RENDER_WIDTH);
     viewport.height = static_cast<float>(RENDER_HEIGHT) / devices.size();
     viewport.minDepth = 0.0f;
@@ -560,8 +575,6 @@ void VulkanSFRRenderer::drawFrame()
     // PHASE 2: Submit ALL GPUs' render work in parallel
     for (size_t i = 0; i < devices.size(); i++)
     {
-        uint32_t yOffset = i * sectionHeight;
-
         updateCameraUniformBuffer(i, imageIndex);
         updateSceneUniformBuffer(i, imageIndex);
 
@@ -571,7 +584,33 @@ void VulkanSFRRenderer::drawFrame()
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(commandBuffers[i][imageIndex], &beginInfo);
 
-        recordSFRRenderCommands(i, commandBuffers[i][imageIndex], imageIndex, yOffset, sectionHeight);
+        recordSFRRenderCommands(i, commandBuffers[i][imageIndex], imageIndex, 0, sectionHeight);
+
+        // After render pass, sfrRenderImages[i] is in TRANSFER_SRC_OPTIMAL
+        // Copy render result to the external memory image for cross-GPU transfer
+        if (useExternalMemory && i != mainGPU)
+        {
+            transitionImageLayout(commandBuffers[i][imageIndex], sfrExternalImages[i].sourceImage,
+                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+            VkImageCopy copyRegion{};
+            copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copyRegion.srcSubresource.mipLevel = 0;
+            copyRegion.srcSubresource.baseArrayLayer = 0;
+            copyRegion.srcSubresource.layerCount = 1;
+            copyRegion.srcOffset = {0, 0, 0};
+            copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copyRegion.dstSubresource.mipLevel = 0;
+            copyRegion.dstSubresource.baseArrayLayer = 0;
+            copyRegion.dstSubresource.layerCount = 1;
+            copyRegion.dstOffset = {0, 0, 0};
+            copyRegion.extent = {RENDER_WIDTH, sectionHeight, 1};
+
+            vkCmdCopyImage(commandBuffers[i][imageIndex],
+                           sfrRenderImages[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           sfrExternalImages[i].sourceImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           1, &copyRegion);
+        }
 
         if (!useExternalMemory)
         {
@@ -645,9 +684,9 @@ void VulkanSFRRenderer::drawFrame()
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(compositeCmd, &beginInfo);
-        //
-        // transitionImageLayout(compositeCmd, sfrCompositeImage,
-        //                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        transitionImageLayout(compositeCmd, swapChainImages[imageIndex],
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
         for (size_t i = 0; i < devices.size(); i++)
         {
@@ -655,6 +694,8 @@ void VulkanSFRRenderer::drawFrame()
 
             VkImage srcImage = (i == mainGPU) ? sfrRenderImages[mainGPU] : sfrExternalImages[i].importedImage;
 
+            // mainGPU's render image is already TRANSFER_SRC_OPTIMAL from the render pass
+            // imported external images need an explicit transition
             if (i != mainGPU)
             {
                 transitionImageLayout(compositeCmd, srcImage,
@@ -666,7 +707,7 @@ void VulkanSFRRenderer::drawFrame()
             copyRegion.srcSubresource.mipLevel = 0;
             copyRegion.srcSubresource.baseArrayLayer = 0;
             copyRegion.srcSubresource.layerCount = 1;
-            copyRegion.srcOffset = {0, static_cast<int32_t>(yOffset), 0};
+            copyRegion.srcOffset = {0, 0, 0};
             copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             copyRegion.dstSubresource.mipLevel = 0;
             copyRegion.dstSubresource.baseArrayLayer = 0;
@@ -674,38 +715,11 @@ void VulkanSFRRenderer::drawFrame()
             copyRegion.dstOffset = {0, static_cast<int32_t>(yOffset), 0};
             copyRegion.extent = {RENDER_WIDTH, sectionHeight, 1};
 
-            // vkCmdCopyImage(compositeCmd,
-            //                srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            //                sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            //                1, &copyRegion);
+            vkCmdCopyImage(compositeCmd,
+                           srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           swapChainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           1, &copyRegion);
         }
-
-        // transitionImageLayout(compositeCmd, sfrCompositeImage,
-        //                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        transitionImageLayout(compositeCmd, swapChainImages[imageIndex],
-                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-        VkImageBlit blitRegion{};
-        blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blitRegion.srcSubresource.mipLevel = 0;
-        blitRegion.srcSubresource.baseArrayLayer = 0;
-        blitRegion.srcSubresource.layerCount = 1;
-        blitRegion.srcOffsets[0] = {0, 0, 0};
-        blitRegion.srcOffsets[1] = {static_cast<int32_t>(RENDER_WIDTH), static_cast<int32_t>(RENDER_HEIGHT), 1};
-        blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blitRegion.dstSubresource.mipLevel = 0;
-        blitRegion.dstSubresource.baseArrayLayer = 0;
-        blitRegion.dstSubresource.layerCount = 1;
-        blitRegion.dstOffsets[0] = {0, 0, 0};
-        blitRegion.dstOffsets[1] = {
-            static_cast<int32_t>(swapChainExtent.width),
-            static_cast<int32_t>(swapChainExtent.height), 1
-        };
-
-        // vkCmdBlitImage(compositeCmd,
-        //                sfrCompositeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //                swapChainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        //                1, &blitRegion, VK_FILTER_LINEAR);
 
         transitionImageLayout(compositeCmd, swapChainImages[imageIndex],
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
