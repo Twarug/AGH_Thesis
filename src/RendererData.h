@@ -46,7 +46,7 @@ struct CameraUBO
 {
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
-    alignas(4) float time;  // Elapsed time for animations
+    alignas(4) float time;      // Elapsed time for animations
     alignas(4) float uvYStart;  // SFR: start of this GPU's vertical strip in [0,1] UV space
     alignas(4) float uvYEnd;    // SFR: end of this GPU's vertical strip in [0,1] UV space
 };
@@ -55,12 +55,4 @@ struct CameraUBO
 struct ModelUBO
 {
     alignas(16) glm::mat4 model;
-};
-
-// Legacy: Combined UBO (kept for backwards compatibility)
-struct UniformBufferObject
-{
-    alignas(16) glm::mat4 model;
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
 };

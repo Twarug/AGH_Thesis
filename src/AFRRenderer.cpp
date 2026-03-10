@@ -98,8 +98,6 @@ void VulkanAFRRenderer::createAFRResources()
         createStagingBufferResources();
     }
 
-    size_t mainGPU = 0;
-
     afrRenderCompleteSemaphores.resize(devices.size());
     for (size_t i = 0; i < devices.size(); i++)
     {
@@ -151,8 +149,6 @@ void VulkanAFRRenderer::createAFRResources()
 
 bool VulkanAFRRenderer::createExternalMemoryResources()
 {
-    size_t mainGPU = 0;
-
     afrRenderImages.resize(devices.size());
     afrRenderImageMemories.resize(devices.size());
     afrRenderImageViews.resize(devices.size());
@@ -339,8 +335,6 @@ void VulkanAFRRenderer::cleanupPartialExternalMemoryResources(size_t failedIndex
 
 void VulkanAFRRenderer::cleanupAFRResources()
 {
-    size_t mainGPU = 0;
-
     for (auto& device : devices)
     {
         vkDeviceWaitIdle(device);
@@ -465,13 +459,6 @@ void VulkanAFRRenderer::cleanupAFRResources()
 
 void VulkanAFRRenderer::drawFrame()
 {
-    if (devices.size() == 1)
-    {
-        drawFrameSingleGPU();
-        return;
-    }
-
-    size_t mainGPU = 0;
     size_t renderGPU = frameNumber % devices.size();
 
     size_t gpuFrameIndex = (frameNumber / devices.size()) % MAX_FRAMES_IN_FLIGHT;

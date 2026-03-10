@@ -323,8 +323,6 @@ void VulkanSFRRenderer::cleanupPartialExternalMemoryResources(size_t failedIndex
 
 void VulkanSFRRenderer::cleanupSFRResources()
 {
-    size_t mainGPU = 0;
-
     for (size_t i = 0; i < devices.size(); i++)
     {
         vkDeviceWaitIdle(devices[i]);
