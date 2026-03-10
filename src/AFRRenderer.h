@@ -45,9 +45,6 @@ private:
     bool useExternalMemory = false;
     std::vector<ExternalImage> afrExternalImages;
 
-    VkImage afrCompositeImage = VK_NULL_HANDLE;
-    VkDeviceMemory afrCompositeImageMemory = VK_NULL_HANDLE;
-
     std::vector<VkSemaphore> afrRenderCompleteSemaphores;
     std::vector<VkSemaphore> afrPresentReadySemaphores;
     std::vector<VkCommandBuffer> afrCompositeCommandBuffers;

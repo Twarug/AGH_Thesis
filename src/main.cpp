@@ -43,7 +43,8 @@ Config parseArgs(int argc, char* argv[])
             printUsage(argv[0]);
             exit(0);
         }
-        else if (arg == "--list" || arg == "-l")
+
+        if (arg == "--list" || arg == "-l")
         {
             config.listCases = true;
         }
@@ -133,6 +134,7 @@ int main(int argc, char* argv[])
     catch (const std::exception& e)
     {
         std::println(stderr, "Error: {}", e.what());
+        system("pause");
         return EXIT_FAILURE;
     }
 
