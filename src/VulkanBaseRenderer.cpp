@@ -342,18 +342,52 @@ void VulkanBaseRenderer::createLogicalDevices()
     {
         QueueFamilyIndices indices = findQueueFamilies(physicalDevices[i]);
 
-        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-        std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
+        // Check how many queues the graphics family supports
+        uint32_t queueFamilyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> queueFamilyProps(queueFamilyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyCount, queueFamilyProps.data());
 
-        float queuePriority = 1.0f;
-        for (uint32_t queueFamily : uniqueQueueFamilies)
+        bool separateQueues = false;
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+        float queuePriorities[2] = {1.0f, 1.0f};
+
+        if (indices.graphicsFamily == indices.presentFamily)
         {
+            uint32_t familyIdx = indices.graphicsFamily.value();
+            uint32_t availableQueues = queueFamilyProps[familyIdx].queueCount;
+
             VkDeviceQueueCreateInfo queueCreateInfo{};
             queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-            queueCreateInfo.queueFamilyIndex = queueFamily;
-            queueCreateInfo.queueCount = 1;
-            queueCreateInfo.pQueuePriorities = &queuePriority;
+            queueCreateInfo.queueFamilyIndex = familyIdx;
+
+            if (availableQueues >= 2)
+            {
+                // Request 2 queues: one for graphics, one for present/composite
+                queueCreateInfo.queueCount = 2;
+                queueCreateInfo.pQueuePriorities = queuePriorities;
+                separateQueues = true;
+            }
+            else
+            {
+                queueCreateInfo.queueCount = 1;
+                queueCreateInfo.pQueuePriorities = queuePriorities;
+            }
             queueCreateInfos.push_back(queueCreateInfo);
+        }
+        else
+        {
+            // Different families - one queue from each
+            separateQueues = true;
+            for (uint32_t familyIdx : std::set<uint32_t>{indices.graphicsFamily.value(), indices.presentFamily.value()})
+            {
+                VkDeviceQueueCreateInfo queueCreateInfo{};
+                queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+                queueCreateInfo.queueFamilyIndex = familyIdx;
+                queueCreateInfo.queueCount = 1;
+                queueCreateInfo.pQueuePriorities = queuePriorities;
+                queueCreateInfos.push_back(queueCreateInfo);
+            }
         }
 
         VkPhysicalDeviceFeatures deviceFeatures{};
@@ -394,7 +428,23 @@ void VulkanBaseRenderer::createLogicalDevices()
         }
 
         vkGetDeviceQueue(devices[i], indices.graphicsFamily.value(), 0, &graphicsQueues[i]);
-        vkGetDeviceQueue(devices[i], indices.presentFamily.value(), 0, &presentQueues[i]);
+
+        if (separateQueues && indices.graphicsFamily == indices.presentFamily)
+        {
+            // Same family but 2 queues available — use queue index 1 for present
+            vkGetDeviceQueue(devices[i], indices.presentFamily.value(), 1, &presentQueues[i]);
+            std::println("GPU {}: Using separate queues from family {} (graphics=0, present=1)", i, indices.graphicsFamily.value());
+        }
+        else if (indices.graphicsFamily != indices.presentFamily)
+        {
+            vkGetDeviceQueue(devices[i], indices.presentFamily.value(), 0, &presentQueues[i]);
+            std::println("GPU {}: Using separate queue families (graphics={}, present={})", i, indices.graphicsFamily.value(), indices.presentFamily.value());
+        }
+        else
+        {
+            vkGetDeviceQueue(devices[i], indices.presentFamily.value(), 0, &presentQueues[i]);
+            std::println("GPU {}: Sharing single queue for graphics and present (family {})", i, indices.graphicsFamily.value());
+        }
     }
 }
 
@@ -990,7 +1040,7 @@ float VulkanBaseRenderer::getTime() const
 {
     static auto startTime = std::chrono::high_resolution_clock::now();
     auto currentTime = std::chrono::high_resolution_clock::now();
-    return std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    return std::chrono::duration<float>(currentTime - startTime).count();
 }
 
 void VulkanBaseRenderer::updateCameraUniformBuffer(size_t gpuIndex, uint32_t currentImage)
