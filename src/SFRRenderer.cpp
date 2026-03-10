@@ -490,7 +490,11 @@ glm::mat4 VulkanSFRRenderer::getProjectionMatrix(size_t gpuIndex)
     glm::mat4 proj = glm::frustum(left, right, stripBottom, stripTop, zNear, zFar);
 
     // 5. Vulkan Y-Flip: Invert the Y axis to match Vulkan's clip space (Y-down)
+    // For asymmetric frustums, both the scale (P[1][1]) and the off-center offset (P[2][1])
+    // must be negated. For symmetric frustums P[2][1] is 0 so only P[1][1] matters,
+    // but here the strip bounds are asymmetric (e.g. bottom=0, top=halfH).
     proj[1][1] *= -1.0f;
+    proj[2][1] *= -1.0f;
 
     return proj;
 }
