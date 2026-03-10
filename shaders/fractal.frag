@@ -176,9 +176,7 @@ void main()
     }
 
     if (t >= tmax)
-    {
-        col = mix(vec3(0.1, 0.1, 0.15), vec3(0.02, 0.02, 0.05), globalUV.y);
-    }
+        discard;
 
     col = col / (col + vec3(1.0));
 

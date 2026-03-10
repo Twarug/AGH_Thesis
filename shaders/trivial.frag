@@ -20,16 +20,18 @@ layout(push_constant) uniform PushConstants {
 void main()
 {
     float t = camera.time * 0.5;
-    vec3 color = vec3(
-        0.1 + 0.05 * sin(t),
-        0.1 + 0.05 * sin(t + 2.094),
-        0.15 + 0.05 * sin(t + 4.188)
-    );
-
     vec2 globalUV = vec2(fragUV.x, mix(camera.uvYStart, camera.uvYEnd, fragUV.y));
     vec2 grid = fract(globalUV * 20.0);
-    float line = step(0.95, grid.x) + step(0.95, grid.y);
-    color += vec3(0.02) * line;
+
+    float line = step(0.9, grid.x) + step(0.9, grid.y);
+    if (line < 0.5)
+        discard;
+
+    vec3 color = vec3(
+        0.3 + 0.15 * sin(t),
+        0.3 + 0.15 * sin(t + 2.094),
+        0.35 + 0.15 * sin(t + 4.188)
+    );
 
     outColor = vec4(color, 1.0);
 }

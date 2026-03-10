@@ -117,6 +117,10 @@ void main()
 
     finalColor = finalColor / (finalColor + vec3(1.0));
 
+    float luminance = dot(finalColor, vec3(0.299, 0.587, 0.114));
+    if (luminance < 0.05)
+        discard;
+
     finalColor = pow(finalColor, vec3(1.0 / 2.2));
 
     outColor = vec4(finalColor, 1.0);
