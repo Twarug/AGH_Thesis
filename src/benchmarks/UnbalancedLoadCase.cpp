@@ -1,6 +1,7 @@
 #include "UnbalancedLoadCase.h"
 #include "../RendererData.h"
 #include "../FileUtils.h"
+#include <algorithm>
 #include <print>
 
 void UnbalancedLoadScene::createPipelines(VulkanBaseRenderer* renderer)
@@ -169,32 +170,57 @@ void UnbalancedLoadScene::recordDrawCommands(VkCommandBuffer commandBuffer, size
 {
     VkPipelineLayout layout = rendererRef->getPipelineLayout(gpuIndex);
 
-    uint32_t halfHeight = RENDER_HEIGHT / 2;
+    // The heavy/trivial split is at y=0.5 in full-screen UV space.
+    // Map it to this GPU's section-local coordinates.
+    glm::vec2 uvRange = rendererRef->getUVYRange(gpuIndex);
+    float sectionFraction = uvRange.y - uvRange.x;  // e.g. 0.5 for 2 GPUs
+    uint32_t viewportHeight = static_cast<uint32_t>(RENDER_HEIGHT * sectionFraction);
+    float localSplitNorm = std::clamp((0.5f - uvRange.x) / sectionFraction, 0.0f, 1.0f);
+    auto localSplitY = static_cast<uint32_t>(localSplitNorm * viewportHeight);
 
-    VkRect2D topScissor{};
-    topScissor.offset = {0, 0};
-    topScissor.extent = {RENDER_WIDTH, halfHeight};
+    // Draw heavy region (if any falls within this section)
+    if ((config.heavyOnTop && localSplitY > 0) || (!config.heavyOnTop && localSplitY < viewportHeight))
+    {
+        VkRect2D heavyScissor{};
+        if (config.heavyOnTop)
+        {
+            heavyScissor.offset = {0, 0};
+            heavyScissor.extent = {RENDER_WIDTH, localSplitY};
+        }
+        else
+        {
+            heavyScissor.offset = {0, static_cast<int32_t>(localSplitY)};
+            heavyScissor.extent = {RENDER_WIDTH, viewportHeight - localSplitY};
+        }
 
-    VkRect2D bottomScissor{};
-    bottomScissor.offset = {0, static_cast<int32_t>(halfHeight)};
-    bottomScissor.extent = {RENDER_WIDTH, halfHeight};
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, heavyPipelines[gpuIndex]);
+        vkCmdSetScissor(commandBuffer, 0, 1, &heavyScissor);
+        vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(PushConstants), &pushConstantsData);
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    }
 
-    VkRect2D& heavyScissor = config.heavyOnTop ? topScissor : bottomScissor;
-    VkRect2D& trivialScissor = config.heavyOnTop ? bottomScissor : topScissor;
+    // Draw trivial region (if any falls within this section)
+    if ((config.heavyOnTop && localSplitY < viewportHeight) || (!config.heavyOnTop && localSplitY > 0))
+    {
+        VkRect2D trivialScissor{};
+        if (config.heavyOnTop)
+        {
+            trivialScissor.offset = {0, static_cast<int32_t>(localSplitY)};
+            trivialScissor.extent = {RENDER_WIDTH, viewportHeight - localSplitY};
+        }
+        else
+        {
+            trivialScissor.offset = {0, 0};
+            trivialScissor.extent = {RENDER_WIDTH, localSplitY};
+        }
 
-
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, heavyPipelines[gpuIndex]);
-    vkCmdSetScissor(commandBuffer, 0, 1, &heavyScissor);
-    vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(PushConstants), &pushConstantsData);
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-
-
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trivialPipelines[gpuIndex]);
-    vkCmdSetScissor(commandBuffer, 0, 1, &trivialScissor);
-    vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(PushConstants), &pushConstantsData);
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trivialPipelines[gpuIndex]);
+        vkCmdSetScissor(commandBuffer, 0, 1, &trivialScissor);
+        vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(PushConstants), &pushConstantsData);
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    }
 }
 
 REGISTER_BENCHMARK_CASE(UnbalancedLoadCase)

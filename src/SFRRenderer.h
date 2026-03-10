@@ -42,6 +42,9 @@ protected:
     // Override projection matrix for asymmetric frustum in SFR mode
     glm::mat4 getProjectionMatrix(size_t gpuIndex) override;
 
+    // Override UV Y range for fullscreen shaders in SFR mode
+    glm::vec2 getUVYRange(size_t gpuIndex) override;
+
 private:
     // SFR-specific resources
     std::vector<VkRenderPass> multiGpuRenderPasses;  // For off-screen rendering (TRANSFER_SRC_OPTIMAL)

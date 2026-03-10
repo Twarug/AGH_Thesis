@@ -5,6 +5,8 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
     float time;
+    float uvYStart;
+    float uvYEnd;
 } camera;
 
 layout(std430, set = 1, binding = 0) readonly buffer ModelMatrices {

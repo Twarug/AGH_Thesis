@@ -7,6 +7,8 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
     float time;
+    float uvYStart;
+    float uvYEnd;
 } camera;
 
 layout(set = 1, binding = 0) uniform sampler2D previousFrame;
@@ -53,9 +55,12 @@ float fbm(vec2 p, int octaves)
 
 void main()
 {
-    vec2 uv = fragUV;
+    // Global UV for procedural patterns (continuous across SFR strips)
+    vec2 uv = vec2(fragUV.x, mix(camera.uvYStart, camera.uvYEnd, fragUV.y));
 
-    vec2 distortedUV = uv;
+    // Local UV for previousFrame texture sampling (texture covers this GPU's section)
+    vec2 localUV = fragUV;
+    vec2 distortedUV = localUV;
     float distortAmount = 0.002;
     distortedUV.x += sin(uv.y * 20.0 + camera.time * 2.0) * distortAmount;
     distortedUV.y += cos(uv.x * 20.0 + camera.time * 2.0) * distortAmount;

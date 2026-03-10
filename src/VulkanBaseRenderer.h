@@ -224,6 +224,7 @@ public:
     virtual glm::mat4 getViewMatrix(size_t gpuIndex);
     virtual glm::mat4 getProjectionMatrix(size_t gpuIndex);
     virtual glm::mat4 getModelMatrix(size_t gpuIndex);
+    virtual glm::vec2 getUVYRange(size_t gpuIndex);  // UV Y range [start, end] for fullscreen shaders
     float getTime() const;  // Elapsed time for animations
 
     // Force using a specific GPU (call before run(), -1 means use all available GPUs)

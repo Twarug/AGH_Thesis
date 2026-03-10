@@ -47,6 +47,8 @@ struct CameraUBO
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
     alignas(4) float time;  // Elapsed time for animations
+    alignas(4) float uvYStart;  // SFR: start of this GPU's vertical strip in [0,1] UV space
+    alignas(4) float uvYEnd;    // SFR: end of this GPU's vertical strip in [0,1] UV space
 };
 
 // Model UBO - managed by Scene (set 1, binding 0)

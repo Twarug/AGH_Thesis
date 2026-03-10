@@ -7,6 +7,8 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
     float time;
+    float uvYStart;
+    float uvYEnd;
 } camera;
 
 layout(push_constant) uniform PushConstants {
@@ -105,7 +107,8 @@ float calcSoftShadow(vec3 ro, vec3 rd, float mint, float maxt, float k)
 
 void main()
 {
-    vec2 uv = fragUV * 2.0 - 1.0;
+    vec2 globalUV = vec2(fragUV.x, mix(camera.uvYStart, camera.uvYEnd, fragUV.y));
+    vec2 uv = globalUV * 2.0 - 1.0;
     uv.x *= 16.0 / 9.0;
 
     float camDist = 2.5 + sin(camera.time * 0.1) * 0.5;
@@ -174,14 +177,14 @@ void main()
 
     if (t >= tmax)
     {
-        col = mix(vec3(0.1, 0.1, 0.15), vec3(0.02, 0.02, 0.05), fragUV.y);
+        col = mix(vec3(0.1, 0.1, 0.15), vec3(0.02, 0.02, 0.05), globalUV.y);
     }
 
     col = col / (col + vec3(1.0));
 
     col = pow(col, vec3(1.0 / 2.2));
 
-    float vignette = 1.0 - 0.3 * length(fragUV - 0.5);
+    float vignette = 1.0 - 0.3 * length(globalUV - 0.5);
     col *= vignette;
 
     outColor = vec4(col, 1.0);

@@ -499,6 +499,12 @@ glm::mat4 VulkanSFRRenderer::getProjectionMatrix(size_t gpuIndex)
     return proj;
 }
 
+glm::vec2 VulkanSFRRenderer::getUVYRange(size_t gpuIndex)
+{
+    float stripHeight = 1.0f / static_cast<float>(devices.size());
+    return {gpuIndex * stripHeight, (gpuIndex + 1) * stripHeight};
+}
+
 void VulkanSFRRenderer::recordSFRRenderCommands(size_t gpuIndex, VkCommandBuffer commandBuffer,
                                                 uint32_t imageIndex, uint32_t yOffset, uint32_t renderHeight)
 {

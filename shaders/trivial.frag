@@ -7,6 +7,8 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
     float time;
+    float uvYStart;
+    float uvYEnd;
 } camera;
 
 layout(push_constant) uniform PushConstants {
@@ -24,7 +26,8 @@ void main()
         0.15 + 0.05 * sin(t + 4.188)
     );
 
-    vec2 grid = fract(fragUV * 20.0);
+    vec2 globalUV = vec2(fragUV.x, mix(camera.uvYStart, camera.uvYEnd, fragUV.y));
+    vec2 grid = fract(globalUV * 20.0);
     float line = step(0.95, grid.x) + step(0.95, grid.y);
     color += vec3(0.02) * line;
 

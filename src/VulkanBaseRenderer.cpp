@@ -981,6 +981,11 @@ glm::mat4 VulkanBaseRenderer::getModelMatrix(size_t gpuIndex)
     return glm::rotate(glm::mat4(1.0f), getTime() * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 }
 
+glm::vec2 VulkanBaseRenderer::getUVYRange(size_t gpuIndex)
+{
+    return {0.0f, 1.0f};
+}
+
 float VulkanBaseRenderer::getTime() const
 {
     static auto startTime = std::chrono::high_resolution_clock::now();
@@ -994,6 +999,9 @@ void VulkanBaseRenderer::updateCameraUniformBuffer(size_t gpuIndex, uint32_t cur
     ubo.view = getViewMatrix(gpuIndex);
     ubo.proj = getProjectionMatrix(gpuIndex);
     ubo.time = getTime();
+    glm::vec2 uvRange = getUVYRange(gpuIndex);
+    ubo.uvYStart = uvRange.x;
+    ubo.uvYEnd = uvRange.y;
 
     void* data;
     vkMapMemory(devices[gpuIndex], cameraUniformBuffersMemory[gpuIndex][currentImage], 0, sizeof(ubo), 0, &data);
