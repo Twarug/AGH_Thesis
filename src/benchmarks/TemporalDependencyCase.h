@@ -13,16 +13,14 @@ class TemporalDependencyScene : public Scene
 public:
     struct Config
     {
-        int iterations = 50;
-        float decayRate = 0.95f;
+        int numBalls = 10;
     };
 
     explicit TemporalDependencyScene(Config config = {})
         : config(config)
     {
-        sceneName = "TemporalDependency_" + std::to_string(config.iterations);
-        pushConstantsData.iterations = config.iterations;
-        pushConstantsData.decayRate = config.decayRate;
+        sceneName = "TemporalDependency_" + std::to_string(config.numBalls);
+        pushConstantsData.numBalls = config.numBalls;
     }
 
     void generateGeometry() override
@@ -44,10 +42,10 @@ public:
     void pushConstants(VkCommandBuffer commandBuffer, VkPipelineLayout layout) override
     {
         vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                          0, sizeof(PushConstants), &pushConstantsData);
+                           0, sizeof(PushConstants), &pushConstantsData);
     }
 
-    std::string getVertexShaderPath() const override { return "shaders/temporal.vert.spv"; }
+    std::string getVertexShaderPath() const override { return "shaders/fullscreen.vert.spv"; }
     std::string getFragmentShaderPath() const override { return "shaders/temporal.frag.spv"; }
 
     void createBuffers(VulkanBaseRenderer* renderer) override;
@@ -74,12 +72,9 @@ public:
     void updateUniformBuffer(VulkanBaseRenderer* renderer, size_t gpuIndex,
                              uint32_t currentImage, VkDeviceMemory memory) override;
 
-    void preFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex);
-    void postFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex);
-
-    VkFramebuffer getCurrentFramebuffer(size_t gpuIndex) const;
-
-    VkDescriptorSet getCurrentDescriptorSet(size_t gpuIndex) const;
+    void recordPostRenderPassCommands(VkCommandBuffer commandBuffer, size_t gpuIndex,
+                                      VkImage renderTarget, VkImageLayout currentLayout,
+                                      uint32_t width, uint32_t height) override;
 
 private:
     Config config;
@@ -87,12 +82,10 @@ private:
 
     struct PushConstants
     {
-        int iterations;
-        float decayRate;
-        float padding[2];
+        int numBalls;
     };
 
-    PushConstants pushConstantsData = { 50, 0.95f, {0, 0} };
+    PushConstants pushConstantsData = {10};
 
     VkPushConstantRange pushConstantRange = {
         VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -107,18 +100,17 @@ private:
         std::array<VkImage, 2> images = {VK_NULL_HANDLE, VK_NULL_HANDLE};
         std::array<VkDeviceMemory, 2> imageMemories = {VK_NULL_HANDLE, VK_NULL_HANDLE};
         std::array<VkImageView, 2> imageViews = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-        std::array<VkFramebuffer, 2> framebuffers = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
         std::array<VkDescriptorSet, 2> descriptorSets = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
         VkSampler sampler = VK_NULL_HANDLE;
 
         uint32_t currentIndex = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
     };
 
     std::vector<PingPongResources> gpuResources;
-
-    std::vector<VkRenderPass> temporalRenderPasses;
 
     void createPingPongResources(VulkanBaseRenderer* renderer, size_t gpuIndex);
 };
@@ -126,32 +118,29 @@ private:
 class TemporalDependencyCase : public BenchmarkCase
 {
 public:
-    explicit TemporalDependencyCase(int iterations = 50)
-        : iterations(iterations) {}
+    explicit TemporalDependencyCase(int numBalls = 5)
+        : numBalls(numBalls)
+    {
+    }
 
     std::string getName() const override
     {
-        return "TemporalDependency_" + std::to_string(iterations);
+        return "TemporalDependency_" + std::to_string(numBalls);
     }
 
     std::string getDescription() const override
     {
-        return "Ping-pong rendering with " + std::to_string(iterations) +
-               " iterations - tests AFR's worst case (frame N+1 depends on frame N)";
+        return "Ping-pong rendering with " + std::to_string(numBalls) +
+            " balls - tests AFR's worst case (frame N+1 depends on frame N)";
     }
 
     std::unique_ptr<Scene> createScene() const override
     {
         TemporalDependencyScene::Config config;
-        config.iterations = iterations;
+        config.numBalls = numBalls;
         return std::make_unique<TemporalDependencyScene>(config);
     }
 
-    size_t getFrameCount() const override
-    {
-        return 1000;
-    }
-
 private:
-    int iterations;
+    int numBalls;
 };

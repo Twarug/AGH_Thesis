@@ -1,6 +1,6 @@
 #include "VulkanBaseRenderer.h"
 
-constexpr bool spoofGPU = true;
+constexpr bool spoofGPU = false;
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -472,7 +472,7 @@ void VulkanBaseRenderer::createSwapChains()
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     QueueFamilyIndices indices = findQueueFamilies(physicalDevices[mainGPU]);
     uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
@@ -1061,11 +1061,10 @@ void VulkanBaseRenderer::updateCameraUniformBuffer(size_t gpuIndex, uint32_t cur
 
 void VulkanBaseRenderer::updateSceneUniformBuffer(size_t gpuIndex, uint32_t currentImage)
 {
-    if (!sceneUniformBuffersMemory[gpuIndex].empty())
-    {
-        currentScene->updateUniformBuffer(this, gpuIndex, currentImage,
-                                          sceneUniformBuffersMemory[gpuIndex][currentImage]);
-    }
+    VkDeviceMemory memory = sceneUniformBuffersMemory[gpuIndex].empty()
+        ? VK_NULL_HANDLE
+        : sceneUniformBuffersMemory[gpuIndex][currentImage];
+    currentScene->updateUniformBuffer(this, gpuIndex, currentImage, memory);
 }
 
 void VulkanBaseRenderer::drawFrameSingleGPU()
@@ -1136,6 +1135,11 @@ void VulkanBaseRenderer::drawFrameSingleGPU()
     recordDrawCommands(commandBuffers[gpu][imageIndex], gpu, imageIndex, viewport, scissor);
 
     vkCmdEndRenderPass(commandBuffers[gpu][imageIndex]);
+
+    currentScene->recordPostRenderPassCommands(commandBuffers[gpu][imageIndex], gpu,
+                                               swapChainImages[imageIndex],
+                                               VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                               swapChainExtent.width, swapChainExtent.height);
 
     if (vkEndCommandBuffer(commandBuffers[gpu][imageIndex]) != VK_SUCCESS)
     {
@@ -1744,6 +1748,34 @@ void VulkanBaseRenderer::transitionImageLayout(VkCommandBuffer commandBuffer, Vk
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    else if (oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR && newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+    {
+        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+    {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = 0;
+        sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    }
+    else if (oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+    {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        sourceStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+    {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     }
     else
     {

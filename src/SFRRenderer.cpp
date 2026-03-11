@@ -533,6 +533,12 @@ void VulkanSFRRenderer::recordSFRRenderCommands(size_t gpuIndex, VkCommandBuffer
     recordDrawCommands(commandBuffer, gpuIndex, imageIndex, viewport, scissor);
 
     vkCmdEndRenderPass(commandBuffer);
+
+    currentScene->recordPostRenderPassCommands(commandBuffer, gpuIndex,
+                                               sfrRenderImages[gpuIndex],
+                                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                               static_cast<uint32_t>(viewport.width),
+                                               static_cast<uint32_t>(viewport.height));
 }
 
 void VulkanSFRRenderer::drawFrame()

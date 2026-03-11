@@ -8,16 +8,20 @@ void TemporalDependencyScene::createPingPongResources(VulkanBaseRenderer* render
     VkDevice device = renderer->getDevice(gpuIndex);
     auto& res = gpuResources[gpuIndex];
 
+    glm::vec2 uvRange = renderer->getUVYRange(gpuIndex);
+    res.width = RENDER_WIDTH;
+    res.height = static_cast<uint32_t>(RENDER_HEIGHT * (uvRange.y - uvRange.x));
+
     for (int i = 0; i < 2; i++)
     {
-        renderer->createImage(gpuIndex, RENDER_WIDTH, RENDER_HEIGHT, VK_FORMAT_B8G8R8A8_UNORM,
+        renderer->createImage(gpuIndex, res.width, res.height, VK_FORMAT_B8G8R8A8_SRGB,
                               VK_IMAGE_TILING_OPTIMAL,
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                               res.images[i], res.imageMemories[i]);
 
         res.imageViews[i] = renderer->createImageView(device, res.images[i],
-                                                      VK_FORMAT_B8G8R8A8_UNORM,
+                                                      VK_FORMAT_B8G8R8A8_SRGB,
                                                       VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
@@ -40,16 +44,30 @@ void TemporalDependencyScene::createPingPongResources(VulkanBaseRenderer* render
         throw std::runtime_error("Failed to create temporal sampler!");
     }
 
+    VkClearColorValue black{};
+    VkImageSubresourceRange range{};
+    range.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.baseMipLevel   = 0;
+    range.levelCount     = 1;
+    range.baseArrayLayer = 0;
+    range.layerCount     = 1;
+
     VkCommandBuffer cmdBuffer = renderer->beginSingleTimeCommands(gpuIndex);
     for (int i = 0; i < 2; i++)
     {
         renderer->transitionImageLayout(cmdBuffer, res.images[i],
                                         VK_IMAGE_LAYOUT_UNDEFINED,
+                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdClearColorImage(cmdBuffer, res.images[i],
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &black, 1, &range);
+        renderer->transitionImageLayout(cmdBuffer, res.images[i],
+                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     renderer->endSingleTimeCommands(gpuIndex, cmdBuffer);
 
-    std::println("Created temporal ping-pong resources for GPU {} ({}x{})", gpuIndex, RENDER_WIDTH, RENDER_HEIGHT);
+    std::println("Created temporal ping-pong resources for GPU {} ({}x{})", gpuIndex, res.width, res.height);
 }
 
 
@@ -59,7 +77,6 @@ void TemporalDependencyScene::createBuffers(VulkanBaseRenderer* renderer)
     size_t deviceCount = renderer->getDeviceCount();
 
     gpuResources.resize(deviceCount);
-    temporalRenderPasses.resize(deviceCount, VK_NULL_HANDLE);
 
     for (size_t i = 0; i < deviceCount; i++)
     {
@@ -97,7 +114,6 @@ void TemporalDependencyScene::destroyBuffers(VulkanBaseRenderer* renderer)
     }
 
     gpuResources.clear();
-    temporalRenderPasses.clear();
     rendererRef = nullptr;
 }
 
@@ -187,7 +203,7 @@ void TemporalDependencyScene::createDescriptorSets(VulkanBaseRenderer* renderer,
     descriptorSets.resize(imageCount);
     for (size_t i = 0; i < imageCount; i++)
     {
-        descriptorSets[i] = res.descriptorSets[res.currentIndex];
+        descriptorSets[i] = res.descriptorSets[0];
     }
 }
 
@@ -206,27 +222,64 @@ void TemporalDependencyScene::updateUniformBuffer(VulkanBaseRenderer* renderer, 
     gpuResources[gpuIndex].currentIndex = 1 - gpuResources[gpuIndex].currentIndex;
 }
 
-VkFramebuffer TemporalDependencyScene::getCurrentFramebuffer(size_t gpuIndex) const
-{
-    return gpuResources[gpuIndex].framebuffers[gpuResources[gpuIndex].currentIndex];
-}
-
-VkDescriptorSet TemporalDependencyScene::getCurrentDescriptorSet(size_t gpuIndex) const
-{
-    return gpuResources[gpuIndex].descriptorSets[gpuResources[gpuIndex].currentIndex];
-}
-
-void TemporalDependencyScene::preFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex)
-{
-}
-
-void TemporalDependencyScene::postFrameUpdate(VulkanBaseRenderer* renderer, size_t gpuIndex)
-{
-}
-
 void TemporalDependencyScene::recordDrawCommands(VkCommandBuffer commandBuffer, size_t gpuIndex)
 {
+    auto& res = gpuResources[gpuIndex];
+    VkDescriptorSet currentSet = res.descriptorSets[res.currentIndex];
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            rendererRef->getPipelineLayout(gpuIndex), 1, 1, &currentSet, 0, nullptr);
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+}
+
+void TemporalDependencyScene::recordPostRenderPassCommands(VkCommandBuffer commandBuffer, size_t gpuIndex,
+                                                           VkImage renderTarget, VkImageLayout currentLayout,
+                                                           uint32_t width, uint32_t height)
+{
+    auto& res = gpuResources[gpuIndex];
+    uint32_t writeIndex = res.currentIndex;
+
+    // Transition render target to TRANSFER_SRC if needed
+    if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+    {
+        rendererRef->transitionImageLayout(commandBuffer, renderTarget,
+                                           currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    }
+
+    // Transition ping-pong write image from SHADER_READ_ONLY to TRANSFER_DST
+    rendererRef->transitionImageLayout(commandBuffer, res.images[writeIndex],
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    // Copy render target to ping-pong write image
+    VkImageCopy copyRegion{};
+    copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.srcSubresource.mipLevel = 0;
+    copyRegion.srcSubresource.baseArrayLayer = 0;
+    copyRegion.srcSubresource.layerCount = 1;
+    copyRegion.srcOffset = {0, 0, 0};
+    copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.dstSubresource.mipLevel = 0;
+    copyRegion.dstSubresource.baseArrayLayer = 0;
+    copyRegion.dstSubresource.layerCount = 1;
+    copyRegion.dstOffset = {0, 0, 0};
+    copyRegion.extent = {res.width, res.height, 1};
+
+    vkCmdCopyImage(commandBuffer,
+                   renderTarget, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   res.images[writeIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &copyRegion);
+
+    // Transition ping-pong write image back to SHADER_READ_ONLY
+    rendererRef->transitionImageLayout(commandBuffer, res.images[writeIndex],
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    // Restore render target layout if it was changed
+    if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+    {
+        rendererRef->transitionImageLayout(commandBuffer, renderTarget,
+                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout);
+    }
 }
 
 REGISTER_BENCHMARK_CASE(TemporalDependencyCase)

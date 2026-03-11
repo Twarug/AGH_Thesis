@@ -102,6 +102,11 @@ public:
     // Override to disable backface culling
     virtual bool needsCulling() const { return true; }
 
+    // Called after vkCmdEndRenderPass - override to copy render target to ping-pong buffers etc.
+    virtual void recordPostRenderPassCommands(VkCommandBuffer commandBuffer, size_t gpuIndex,
+                                              VkImage renderTarget, VkImageLayout currentLayout,
+                                              uint32_t width, uint32_t height) {}
+
     // Override to use custom vertex input (false = no vertex buffers, generate in shader)
     virtual bool needsVertexInput() const { return true; }
 

@@ -537,6 +537,11 @@ void VulkanAFRRenderer::drawFrame()
 
     vkCmdEndRenderPass(commandBuffers[renderGPU][imageIndex]);
 
+    currentScene->recordPostRenderPassCommands(commandBuffers[renderGPU][imageIndex], renderGPU,
+                                               afrRenderImages[renderGPU],
+                                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                               RENDER_WIDTH, RENDER_HEIGHT);
+
     // After render pass, afrRenderImages[renderGPU] is in TRANSFER_SRC_OPTIMAL
     // Copy render result to the external memory image for cross-GPU transfer
     if (useExternalMemory && renderGPU != mainGPU)
