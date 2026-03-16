@@ -237,14 +237,19 @@ public:
             return false;
         }
 
-        file << "frame,frame_time_ms,fps,fence_wait_ms,memcpy_ms,total_sync_ms\n";
+        file << "frame;frame_time_ms;fps;fence_wait_ms;memcpy_ms;total_sync_ms\n";
         for (size_t i = 0; i < frameTimes.size(); i++)
         {
             double fenceWait = (i < fenceWaitTimes.size()) ? fenceWaitTimes[i] : 0.0;
             double memcpyTime = (i < memcpyTimes.size()) ? memcpyTimes[i] : 0.0;
-            file << std::format("{},{:.4f},{:.2f},{:.4f},{:.4f},{:.4f}\n",
-                                i, frameTimes[i], 1000.0 / frameTimes[i],
-                                fenceWait, memcpyTime, fenceWait + memcpyTime);
+            auto toComma = [](std::string s) { std::ranges::replace(s, '.', ','); return s; };
+            file << std::format("{};{};{};{};{};{}\n",
+                                i,
+                                toComma(std::format("{:.4f}", frameTimes[i])),
+                                toComma(std::format("{:.2f}", 1000.0 / frameTimes[i])),
+                                toComma(std::format("{:.4f}", fenceWait)),
+                                toComma(std::format("{:.4f}", memcpyTime)),
+                                toComma(std::format("{:.4f}", fenceWait + memcpyTime)));
         }
 
         std::println("Exported frame times to: {}", filename);
@@ -263,21 +268,30 @@ public:
         // Write header if not appending or file is empty
         if (!append)
         {
-            file << "renderer,scene,frames,min_ms,max_ms,avg_ms,median_ms,stddev_ms,p1_ms,p99_ms,avg_fps,"
-                << "sync_fence_avg_ms,sync_fence_max_ms,sync_memcpy_avg_ms,sync_memcpy_max_ms,sync_total_avg_ms,sync_overhead_pct\n";
+            file << "renderer;scene;frames;min_ms;max_ms;avg_ms;median_ms;stddev_ms;p1_ms;p99_ms;avg_fps;"
+                << "sync_fence_avg_ms;sync_fence_max_ms;sync_memcpy_avg_ms;sync_memcpy_max_ms;sync_total_avg_ms;sync_overhead_pct\n";
         }
 
         Stats stats = calculateStats();
         SyncStats syncStats = calculateSyncStats();
 
-        file << std::format("{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.2f},"
-                            "{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.2f}\n",
+        auto toComma = [](std::string s) { std::ranges::replace(s, '.', ','); return s; };
+        file << std::format("{};{};{};{};{};{};{};{};{};{};{};{};{};{};{};{};{}\n",
                             rendererName, sceneName, stats.frameCount,
-                            stats.minMs, stats.maxMs, stats.avgMs, stats.medianMs, stats.stdDevMs,
-                            stats.percentile1Ms, stats.percentile99Ms, stats.avgFps,
-                            syncStats.avgFenceWaitMs, syncStats.maxFenceWaitMs,
-                            syncStats.avgMemcpyMs, syncStats.maxMemcpyMs,
-                            syncStats.avgTotalSyncMs, syncStats.syncOverheadPercent);
+                            toComma(std::format("{:.4f}", stats.minMs)),
+                            toComma(std::format("{:.4f}", stats.maxMs)),
+                            toComma(std::format("{:.4f}", stats.avgMs)),
+                            toComma(std::format("{:.4f}", stats.medianMs)),
+                            toComma(std::format("{:.4f}", stats.stdDevMs)),
+                            toComma(std::format("{:.4f}", stats.percentile1Ms)),
+                            toComma(std::format("{:.4f}", stats.percentile99Ms)),
+                            toComma(std::format("{:.2f}", stats.avgFps)),
+                            toComma(std::format("{:.4f}", syncStats.avgFenceWaitMs)),
+                            toComma(std::format("{:.4f}", syncStats.maxFenceWaitMs)),
+                            toComma(std::format("{:.4f}", syncStats.avgMemcpyMs)),
+                            toComma(std::format("{:.4f}", syncStats.maxMemcpyMs)),
+                            toComma(std::format("{:.4f}", syncStats.avgTotalSyncMs)),
+                            toComma(std::format("{:.2f}", syncStats.syncOverheadPercent)));
 
         return true;
     }
