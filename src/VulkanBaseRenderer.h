@@ -49,10 +49,10 @@ struct ExternalImage {
 
 
 // Render dimensions (internal framebuffer resolution - 4K for heavy fragment testing)
-// const uint32_t RENDER_WIDTH = 3840;
-// const uint32_t RENDER_HEIGHT = 2160;
-const uint32_t RENDER_WIDTH = 1920;
-const uint32_t RENDER_HEIGHT = 1080;
+const uint32_t RENDER_WIDTH = 3840;
+const uint32_t RENDER_HEIGHT = 2160;
+// const uint32_t RENDER_WIDTH = 1920;
+// const uint32_t RENDER_HEIGHT = 1080;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Validation layers

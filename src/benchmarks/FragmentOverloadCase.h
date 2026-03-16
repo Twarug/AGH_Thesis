@@ -168,11 +168,6 @@ public:
         return std::make_unique<FragmentOverloadScene>(config);
     }
 
-    [[nodiscard]] size_t getFrameCount() const override
-    {
-        return 1000;
-    }
-
 private:
     int iterations;
 };

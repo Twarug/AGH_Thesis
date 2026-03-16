@@ -166,11 +166,6 @@ public:
         return std::make_unique<UnbalancedLoadScene>(config);
     }
 
-    size_t getFrameCount() const override
-    {
-        return 1000;
-    }
-
 private:
     int iterations;
     bool heavyOnTop;

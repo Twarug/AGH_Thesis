@@ -33,7 +33,7 @@ public:
     virtual std::unique_ptr<Scene> createScene() const = 0;
 
     // Configuration (can be overridden)
-    virtual size_t getFrameCount() const { return 100'000; }
+    virtual size_t getFrameCount() const { return 10'000; }
     virtual size_t getWarmupFrames() const { return 100; }
 
     // Which renderers to run (can be overridden to skip some)
