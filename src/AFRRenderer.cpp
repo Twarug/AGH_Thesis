@@ -595,7 +595,7 @@ void VulkanAFRRenderer::drawFrame()
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffers[renderGPU][imageIndex];
 
-    // Only signal semaphore for same-GPU rendering (GPU-to-GPU sync uses CPU fence wait)
+    // Only signal semaphore for same-GPU rendering (cross-GPU sync uses CPU fence wait)
     VkSemaphore renderSignalSemaphore = VK_NULL_HANDLE;
     if (renderGPU == mainGPU)
     {
@@ -611,12 +611,9 @@ void VulkanAFRRenderer::drawFrame()
     }
 
     // PHASE 3: Composite on main GPU
-    // For cross-GPU host allocation: wait on CPU for render GPU to finish writing to host memory
-    if (useExternalMemory && renderGPU != mainGPU)
-    {
-        vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
-    }
-
+    // Record the composite command buffer first so that CB assembly overlaps with
+    // the render GPU's execution.  The fence wait (for cross-GPU paths) is deferred
+    // to just before the submit, giving the render GPU maximum time to finish.
     vkResetCommandBuffer(afrCompositeCommandBuffers[currentFrame], 0);
 
     VkCommandBufferBeginInfo compositeBeginInfo{};
@@ -714,12 +711,27 @@ void VulkanAFRRenderer::drawFrame()
     waitSemaphores.push_back(imageAvailableSemaphores[mainGPU][currentFrame]);
     waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-    // For same-GPU rendering, wait on render complete semaphore
-    // For cross-GPU, CPU fence wait already happened above (host memory is ready)
+    // For same-GPU rendering, wait on render complete semaphore.
+    // For cross-GPU, the CPU fence wait below serializes execution before the submit.
     if (renderGPU == mainGPU)
     {
         waitSemaphores.push_back(afrRenderCompleteSemaphores[currentFrame]);
         waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
+    }
+
+    // Cross-GPU fence wait: deferred to here so composite CB recording overlaps render GPU execution.
+    // For external memory: ensures the render GPU has flushed writes to the shared host allocation.
+    // For staging buffers: handled separately in the staging path above (already includes the wait+memcpy).
+    if (useExternalMemory && renderGPU != (size_t)mainGPU)
+    {
+        auto fenceWaitStart = std::chrono::high_resolution_clock::now();
+        vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
+        if (benchmarkEnabled && benchmark)
+        {
+            double fenceMs = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - fenceWaitStart).count();
+            benchmark->addFenceWaitTime(fenceMs);
+        }
     }
 
     compositeSubmit.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
