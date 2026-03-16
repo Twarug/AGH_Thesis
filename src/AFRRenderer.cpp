@@ -75,10 +75,15 @@ void VulkanAFRRenderer::createAFRResources()
 
     if (useExternalMemory)
     {
-        if (!checkExternalMemoryCompatible(1, 0, swapChainImageFormat))
+        for (size_t i = 0; i < devices.size(); i++)
         {
-            std::println("AFR: External memory not compatible between GPUs, using staging buffers");
-            useExternalMemory = false;
+            if (i == (size_t)mainGPU) continue;
+            if (!checkExternalMemoryCompatible(i, mainGPU, swapChainImageFormat))
+            {
+                std::println("AFR: External memory not compatible between GPUs, using staging buffers");
+                useExternalMemory = false;
+                break;
+            }
         }
     }
 
@@ -98,12 +103,12 @@ void VulkanAFRRenderer::createAFRResources()
         createStagingBufferResources();
     }
 
-    afrRenderCompleteSemaphores.resize(devices.size());
-    for (size_t i = 0; i < devices.size(); i++)
+    afrRenderCompleteSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
         VkSemaphoreCreateInfo semaphoreInfo{};
         semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        if (vkCreateSemaphore(devices[i], &semaphoreInfo, nullptr, &afrRenderCompleteSemaphores[i]) != VK_SUCCESS)
+        if (vkCreateSemaphore(devices[mainGPU], &semaphoreInfo, nullptr, &afrRenderCompleteSemaphores[i]) != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create AFR render complete semaphore!");
         }
@@ -340,12 +345,10 @@ void VulkanAFRRenderer::cleanupAFRResources()
         vkDeviceWaitIdle(device);
     }
 
-    for (size_t i = 0; i < afrRenderCompleteSemaphores.size(); i++)
+    for (auto& sem : afrRenderCompleteSemaphores)
     {
-        if (afrRenderCompleteSemaphores[i] != VK_NULL_HANDLE)
-        {
-            vkDestroySemaphore(devices[i], afrRenderCompleteSemaphores[i], nullptr);
-        }
+        if (sem != VK_NULL_HANDLE)
+            vkDestroySemaphore(devices[mainGPU], sem, nullptr);
     }
     afrRenderCompleteSemaphores.clear();
 
@@ -568,7 +571,7 @@ void VulkanAFRRenderer::drawFrame()
                        1, &copyRegion);
     }
 
-    if (!useExternalMemory)
+    if (!useExternalMemory && renderGPU != (size_t)mainGPU)
     {
         VkBufferImageCopy region{};
         region.bufferOffset = 0;
@@ -596,7 +599,7 @@ void VulkanAFRRenderer::drawFrame()
     VkSemaphore renderSignalSemaphore = VK_NULL_HANDLE;
     if (renderGPU == mainGPU)
     {
-        renderSignalSemaphore = afrRenderCompleteSemaphores[mainGPU];
+        renderSignalSemaphore = afrRenderCompleteSemaphores[currentFrame];
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &renderSignalSemaphore;
     }
@@ -715,7 +718,7 @@ void VulkanAFRRenderer::drawFrame()
     // For cross-GPU, CPU fence wait already happened above (host memory is ready)
     if (renderGPU == mainGPU)
     {
-        waitSemaphores.push_back(afrRenderCompleteSemaphores[mainGPU]);
+        waitSemaphores.push_back(afrRenderCompleteSemaphores[currentFrame]);
         waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
     }
 
@@ -726,7 +729,10 @@ void VulkanAFRRenderer::drawFrame()
     compositeSubmit.signalSemaphoreCount = 1;
     compositeSubmit.pSignalSemaphores = &afrPresentReadySemaphores[imageIndex];
 
-    vkQueueSubmit(graphicsQueues[mainGPU], 1, &compositeSubmit, afrCompositeFences[currentFrame]);
+    if (vkQueueSubmit(graphicsQueues[mainGPU], 1, &compositeSubmit, afrCompositeFences[currentFrame]) != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to submit composite command buffer!");
+    }
 
     // PHASE 4: Present on dedicated present queue
     VkPresentInfoKHR presentInfo{};
