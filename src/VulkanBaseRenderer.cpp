@@ -1071,14 +1071,7 @@ void VulkanBaseRenderer::drawFrameSingleGPU()
 {
     constexpr size_t gpu = 0;
 
-    auto fenceStart = std::chrono::high_resolution_clock::now();
     vkWaitForFences(devices[gpu], 1, &inFlightFences[gpu][currentFrame], VK_TRUE, UINT64_MAX);
-    if (benchmarkEnabled && benchmark)
-    {
-        double fenceWaitMs = std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - fenceStart).count();
-        benchmark->addFenceWaitTime(fenceWaitMs);
-    }
 
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(devices[gpu], swapChain, UINT64_MAX,

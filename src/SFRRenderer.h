@@ -2,12 +2,6 @@
 
 #include "VulkanBaseRenderer.h"
 
-// SFR: Split Frame Rendering
-// - Screen divided vertically among GPUs
-// - GPU 0 renders top half
-// - GPU 1 renders bottom half
-// - Each GPU renders to its own render target
-// - Results composited into single swapchain
 class VulkanSFRRenderer final : public VulkanBaseRenderer
 {
 public:
@@ -39,26 +33,24 @@ protected:
 
     VkViewport getFrameViewport(uint32_t gpuIndex) const override;
 
-    // Override projection matrix for asymmetric frustum in SFR mode
     glm::mat4 getProjectionMatrix(size_t gpuIndex) override;
 
-    // Override UV Y range for fullscreen shaders in SFR mode
     glm::vec2 getUVYRange(size_t gpuIndex) override;
 
 private:
     // SFR-specific resources
-    std::vector<VkRenderPass> multiGpuRenderPasses;  // For off-screen rendering (TRANSFER_SRC_OPTIMAL)
+    std::vector<VkRenderPass> multiGpuRenderPasses;
     std::vector<VkImage> sfrRenderImages;
     std::vector<VkDeviceMemory> sfrRenderImageMemories;
     std::vector<VkImageView> sfrRenderImageViews;
     std::vector<VkFramebuffer> sfrFramebuffers;
 
-    // Staging buffers for cross-GPU transfer (host-visible) - FALLBACK when external memory not available
+    // Staging buffers for cross-GPU transfer - FALLBACK
     std::vector<VkBuffer> sfrStagingBuffers;
     std::vector<VkDeviceMemory> sfrStagingMemories;
     std::vector<void*> sfrStagingMapped; // Persistently mapped pointers
 
-    // External memory for zero-copy cross-GPU transfer (preferred when available)
+    // External memory for zero-copy cross-GPU transfer
     bool useExternalMemory = false;
     std::vector<ExternalImage> sfrExternalImages;  // Per non-main GPU
 
@@ -71,9 +63,9 @@ private:
     void createSFRResources();
     void cleanupSFRResources();
     void createMultiGpuRenderPasses();
-    bool createExternalMemoryResources();  // Returns false if external memory import fails
+    bool createExternalMemoryResources();
     void createStagingBufferResources();
-    void cleanupPartialExternalMemoryResources(size_t failedIndex);  // Cleanup after failed external memory setup
+    void cleanupPartialExternalMemoryResources(size_t failedIndex);
     void recordSFRRenderCommands(size_t gpuIndex, VkCommandBuffer commandBuffer,
                                  uint32_t imageIndex, uint32_t yOffset, uint32_t renderHeight);
 };

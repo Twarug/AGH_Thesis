@@ -32,23 +32,27 @@ protected:
     void drawFrame() override;
 
 private:
+    // AFR-specific resources
     std::vector<VkRenderPass> multiGpuRenderPasses;
     std::vector<VkImage> afrRenderImages;
     std::vector<VkDeviceMemory> afrRenderImageMemories;
     std::vector<VkImageView> afrRenderImageViews;
     std::vector<VkFramebuffer> afrFramebuffers;
 
+    // Staging buffers for cross-GPU transfer - FALLBACK
     std::vector<VkBuffer> afrStagingBuffers;
     std::vector<VkDeviceMemory> afrStagingMemories;
-    std::vector<void*> afrStagingMapped;
+    std::vector<void*> afrStagingMapped; // Persistently mapped pointers
 
+    // External memory for zero-copy cross-GPU transfer
     bool useExternalMemory = false;
-    std::vector<ExternalImage> afrExternalImages;
+    std::vector<ExternalImage> afrExternalImages;  // Per non-main GPU
 
-    std::vector<VkSemaphore> afrRenderCompleteSemaphores;
-    std::vector<VkSemaphore> afrPresentReadySemaphores;
-    std::vector<VkCommandBuffer> afrCompositeCommandBuffers;
-    std::vector<VkFence> afrCompositeFences;
+    // Synchronization for alternate frame rendering
+    std::vector<VkSemaphore> afrRenderCompleteSemaphores;  // Per-GPU: signaled when render finishes
+    std::vector<VkSemaphore> afrPresentReadySemaphores;    // Per-frame: signaled when composite is ready
+    std::vector<VkCommandBuffer> afrCompositeCommandBuffers;  // Pre-allocated composite command buffers
+    std::vector<VkFence> afrCompositeFences;  // Per-frame: signaled when composite completes
 
     void createAFRResources();
     void cleanupAFRResources();

@@ -553,9 +553,16 @@ void VulkanSFRRenderer::drawFrame()
     VkDeviceSize sectionSize = RENDER_WIDTH * sectionHeight * 4;
 
     // PHASE 1: Wait for THIS frame's previous composite/present to complete
-    auto fenceStart = std::chrono::high_resolution_clock::now();
-    vkWaitForFences(devices[mainGPU], 1, &sfrCompositeFences[currentFrame], VK_TRUE, UINT64_MAX);
-    vkResetFences(devices[mainGPU], 1, &sfrCompositeFences[currentFrame]);
+    {
+        auto compositeStart = std::chrono::high_resolution_clock::now();
+        vkWaitForFences(devices[mainGPU], 1, &sfrCompositeFences[currentFrame], VK_TRUE, UINT64_MAX);
+        vkResetFences(devices[mainGPU], 1, &sfrCompositeFences[currentFrame]);
+        if (benchmarkEnabled && benchmark)
+        {
+            benchmark->addMemcpyTime(std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - compositeStart).count());
+        }
+    }
 
     vkWaitForFences(devices[mainGPU], 1, &inFlightFences[mainGPU][currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -572,13 +579,6 @@ void VulkanSFRRenderer::drawFrame()
     for (size_t i = 1; i < devices.size(); i++)
     {
         vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
-    }
-
-    if (benchmarkEnabled && benchmark)
-    {
-        double fenceWaitMs = std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - fenceStart).count();
-        benchmark->addFenceWaitTime(fenceWaitMs);
     }
 
     for (size_t i = 0; i < devices.size(); i++)
@@ -686,17 +686,17 @@ void VulkanSFRRenderer::drawFrame()
     // PHASE 3: Composite on main GPU
     if (useExternalMemory)
     {
-        // Wait on CPU for all non-main GPUs to finish writing to host memory
-        auto fenceWaitStart = std::chrono::high_resolution_clock::now();
-        for (size_t i = 1; i < devices.size(); i++)
         {
-            vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
-        }
-        if (benchmarkEnabled && benchmark)
-        {
-            double fenceMs = std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - fenceWaitStart).count();
-            benchmark->addFenceWaitTime(fenceMs);
+            auto syncStallStart = std::chrono::high_resolution_clock::now();
+            for (size_t i = 0; i < devices.size(); i++)
+            {
+                vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
+            }
+            if (benchmarkEnabled && benchmark)
+            {
+                benchmark->addFenceWaitTime(std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - syncStallStart).count());
+            }
         }
 
         VkCommandBuffer compositeCmd = sfrCompositeCommandBuffers[currentFrame];
@@ -774,16 +774,17 @@ void VulkanSFRRenderer::drawFrame()
     }
     else
     {
-        auto stagingFenceStart = std::chrono::high_resolution_clock::now();
-        for (size_t i = 0; i < devices.size(); i++)
         {
-            vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
-        }
-        if (benchmarkEnabled && benchmark)
-        {
-            double fenceMs = std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - stagingFenceStart).count();
-            benchmark->addFenceWaitTime(fenceMs);
+            auto syncStallStart = std::chrono::high_resolution_clock::now();
+            for (size_t i = 0; i < devices.size(); i++)
+            {
+                vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
+            }
+            if (benchmarkEnabled && benchmark)
+            {
+                benchmark->addFenceWaitTime(std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - syncStallStart).count());
+            }
         }
 
         auto memcpyStart = std::chrono::high_resolution_clock::now();

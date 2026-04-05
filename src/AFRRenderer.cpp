@@ -467,19 +467,19 @@ void VulkanAFRRenderer::drawFrame()
     size_t gpuFrameIndex = (frameNumber / devices.size()) % MAX_FRAMES_IN_FLIGHT;
 
     // PHASE 1: Wait for this frame's previous composite/present to complete
-    auto fenceStart = std::chrono::high_resolution_clock::now();
-    vkWaitForFences(devices[mainGPU], 1, &afrCompositeFences[currentFrame], VK_TRUE, UINT64_MAX);
-    vkResetFences(devices[mainGPU], 1, &afrCompositeFences[currentFrame]);
+    {
+        auto compositeStart = std::chrono::high_resolution_clock::now();
+        vkWaitForFences(devices[mainGPU], 1, &afrCompositeFences[currentFrame], VK_TRUE, UINT64_MAX);
+        vkResetFences(devices[mainGPU], 1, &afrCompositeFences[currentFrame]);
+        if (benchmarkEnabled && benchmark)
+        {
+            benchmark->addMemcpyTime(std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - compositeStart).count());
+        }
+    }
 
     vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
     vkResetFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex]);
-
-    if (benchmarkEnabled && benchmark)
-    {
-        double fenceWaitMs = std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - fenceStart).count();
-        benchmark->addFenceWaitTime(fenceWaitMs);
-    }
 
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(devices[mainGPU], swapChain, UINT64_MAX,
@@ -647,13 +647,14 @@ void VulkanAFRRenderer::drawFrame()
         {
             VkDeviceSize frameSize = RENDER_WIDTH * RENDER_HEIGHT * 4;
 
-            auto stagingFenceStart = std::chrono::high_resolution_clock::now();
-            vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
-            if (benchmarkEnabled && benchmark)
             {
-                double fenceMs = std::chrono::duration<double, std::milli>(
-                    std::chrono::high_resolution_clock::now() - stagingFenceStart).count();
-                benchmark->addFenceWaitTime(fenceMs);
+                auto syncStallStart = std::chrono::high_resolution_clock::now();
+                vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
+                if (benchmarkEnabled && benchmark)
+                {
+                    benchmark->addFenceWaitTime(std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - syncStallStart).count());
+                }
             }
 
             auto memcpyStart = std::chrono::high_resolution_clock::now();
@@ -724,13 +725,12 @@ void VulkanAFRRenderer::drawFrame()
     // For staging buffers: handled separately in the staging path above (already includes the wait+memcpy).
     if (useExternalMemory && renderGPU != (size_t)mainGPU)
     {
-        auto fenceWaitStart = std::chrono::high_resolution_clock::now();
+        auto syncStallStart = std::chrono::high_resolution_clock::now();
         vkWaitForFences(devices[renderGPU], 1, &inFlightFences[renderGPU][gpuFrameIndex], VK_TRUE, UINT64_MAX);
         if (benchmarkEnabled && benchmark)
         {
-            double fenceMs = std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - fenceWaitStart).count();
-            benchmark->addFenceWaitTime(fenceMs);
+            benchmark->addFenceWaitTime(std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - syncStallStart).count());
         }
     }
 
