@@ -79,8 +79,8 @@ public:
     // Shader Configuration
     // ========================================================================
 
-    virtual std::string getVertexShaderPath() const { return "shaders/cube.vert.spv"; }
-    virtual std::string getFragmentShaderPath() const { return "shaders/cube.frag.spv"; }
+    virtual std::string getVertexShaderPath() const = 0;
+    virtual std::string getFragmentShaderPath() const = 0;
 
     // ========================================================================
     // Push Constants (optional) - override to provide push constant data
