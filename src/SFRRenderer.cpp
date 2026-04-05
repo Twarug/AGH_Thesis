@@ -687,9 +687,16 @@ void VulkanSFRRenderer::drawFrame()
     if (useExternalMemory)
     {
         // Wait on CPU for all non-main GPUs to finish writing to host memory
+        auto fenceWaitStart = std::chrono::high_resolution_clock::now();
         for (size_t i = 1; i < devices.size(); i++)
         {
             vkWaitForFences(devices[i], 1, &inFlightFences[i][currentFrame], VK_TRUE, UINT64_MAX);
+        }
+        if (benchmarkEnabled && benchmark)
+        {
+            double fenceMs = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - fenceWaitStart).count();
+            benchmark->addFenceWaitTime(fenceMs);
         }
 
         VkCommandBuffer compositeCmd = sfrCompositeCommandBuffers[currentFrame];
